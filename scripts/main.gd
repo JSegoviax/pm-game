@@ -3,6 +3,7 @@ extends Node3D
 ## Rooms are built in code from simple boxes so we can iterate fast before real assets.
 
 const PLAYER_SCRIPT := preload("res://scripts/player.gd")
+const RESIDENT_SCRIPT := preload("res://scripts/resident.gd")
 const WALL_H := 4.0
 const WALL_T := 0.3
 const DOOR_REACH := 1.5
@@ -18,6 +19,11 @@ var _fade: ColorRect
 var _message: Label
 var _prompt: Label
 var _message_timer := 0.0
+var _condition: Label
+var _condition_timer := 0.0
+var _hurt_flash: ColorRect
+var _hallway_bounds: AABB
+var _dead := false
 
 
 func _ready() -> void:
@@ -32,6 +38,10 @@ func _ready() -> void:
 	add_child(player)
 	player.global_position = Vector3(0, 0.05, 3.5)
 	player.face(0.0)  # facing north, into the room
+
+	player.hurt.connect(_on_player_hurt)
+	player.died.connect(_on_player_died)
+	_spawn_resident()
 
 	_update_camera(true)
 	_fade.color.a = 1.0
@@ -211,6 +221,8 @@ func _build_hallway() -> void:
 	_zone(hall, Vector3(-2, -1, 0), Vector3(2, 4, 8), cam_south)
 	_zone(hall, Vector3(-2, -1, -8), Vector3(2, 4, 0), cam_north)
 
+	_hallway_bounds = AABB(hall.global_position + Vector3(-2, -1, -8), Vector3(4, 5, 16))
+
 	_door(hall, Vector3(0, 0, 7.94), "Foyer", false, Vector3(3.5, 0.05, -3.9), PI, "Foyer")
 	_door(hall, Vector3(0, 0, -7.94), "Locked", true)
 
@@ -245,6 +257,19 @@ func _build_hud() -> void:
 	_prompt.add_theme_color_override("font_color", Color(0.85, 0.75, 0.5))
 	layer.add_child(_prompt)
 
+	_condition = Label.new()
+	_condition.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	_condition.offset_left = 8
+	_condition.offset_top = 6
+	_condition.add_theme_font_size_override("font_size", 10)
+	layer.add_child(_condition)
+
+	_hurt_flash = ColorRect.new()
+	_hurt_flash.color = Color(0.6, 0.0, 0.0, 0.0)
+	_hurt_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hurt_flash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(_hurt_flash)
+
 	_fade = ColorRect.new()
 	_fade.color = Color(0, 0, 0, 0)
 	_fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -267,6 +292,11 @@ func _physics_process(delta: float) -> void:
 		if _message_timer <= 0.0:
 			_message.text = ""
 
+	if _condition_timer > 0.0:
+		_condition_timer -= delta
+		if _condition_timer <= 0.0:
+			_condition.text = ""
+
 	for f in _flicker_lights:
 		f.t += delta
 		var l: OmniLight3D = f.light
@@ -275,7 +305,7 @@ func _physics_process(delta: float) -> void:
 
 	var door = _nearest_door()
 	_prompt.text = "" if door == null or _busy else ("[E] Open door" if not door.locked else "[E] Examine door")
-	if door != null and not _busy and Input.is_action_just_pressed("interact"):
+	if door != null and not _busy and not _dead and Input.is_action_just_pressed("interact"):
 		_use_door(door)
 
 
@@ -321,3 +351,41 @@ func _use_door(d: Dictionary) -> void:
 	_show_message(d.room, 2.0)
 	player.frozen = false
 	_busy = false
+
+
+# ---------------------------------------------------------------- threat
+
+func _spawn_resident() -> void:
+	var r := CharacterBody3D.new()
+	r.set_script(RESIDENT_SCRIPT)
+	r.name = "Resident"
+	add_child(r)
+	r.global_position = Vector3(40.6, 0.05, -5.8)
+	r.rotation.y = 0.0  # facing the wall of photographs at the far end
+	r.target = player
+	r.bounds = _hallway_bounds
+	r.spoke.connect(_show_message)
+	r.hit_player.connect(func() -> void: player.take_hit(r.global_position))
+
+
+func _on_player_hurt(health: int) -> void:
+	_hurt_flash.color.a = 0.55
+	create_tween().tween_property(_hurt_flash, "color:a", 0.0, 0.6)
+	var c: String = player.condition()
+	_condition.text = "Condition: " + c
+	var colors := {"Fine": Color(0.55, 0.85, 0.5), "Caution": Color(0.95, 0.75, 0.3), "Danger": Color(0.95, 0.3, 0.25)}
+	_condition.add_theme_color_override("font_color", colors[c])
+	_condition_timer = 2.5
+
+
+func _on_player_died() -> void:
+	_dead = true
+	_busy = true
+	_prompt.text = ""
+	await get_tree().create_timer(0.8).timeout
+	var t := create_tween()
+	t.tween_property(_fade, "color:a", 1.0, 1.6)
+	await t.finished
+	_show_message("The meeting will begin without you.", 4.0)
+	await get_tree().create_timer(3.5).timeout
+	get_tree().reload_current_scene()

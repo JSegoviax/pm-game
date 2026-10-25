@@ -23,7 +23,7 @@ Built with Godot 4.7 (Compatibility renderer, GDScript) for desktop browsers fir
 ## Milestones
 
 - [x] **1. Room prototype:** two rooms, fixed camera angles, tank controls, door transitions
-- [ ] 2. Threat: one enemy, health, death and restart
+- [x] **2. Threat:** a resident who is no longer himself, health, getting caught, death and restart
 - [ ] 3. Loop: inventory, a key, the locked door, a safe room and saving
 - [ ] 4. Slice complete: all rooms, the puzzle, residents to talk to, the ending, sound
 - [ ] 5. Polish and ship: web build on jaimesegovia.com

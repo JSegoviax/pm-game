@@ -8,7 +8,15 @@ const TURN_SPEED := 2.6  # radians per second
 const GRAVITY := 9.8
 const QUICK_TURN_TIME := 0.35
 
+signal hurt(health: int)
+signal died
+
+const MAX_HEALTH := 5
+
 var frozen := false
+var health := MAX_HEALTH
+var _stagger := 0.0
+var _knock := Vector3.ZERO
 var _quick_turning := false
 var _bob := 0.0
 var _body: Node3D
@@ -58,6 +66,14 @@ func _physics_process(delta: float) -> void:
 	else:
 		velocity.y -= GRAVITY * delta
 
+	if _stagger > 0.0:
+		_stagger -= delta
+		_knock = _knock.move_toward(Vector3.ZERO, delta * 8.0)
+		velocity.x = _knock.x
+		velocity.z = _knock.z
+		move_and_slide()
+		return
+
 	if frozen or _quick_turning:
 		velocity.x = 0.0
 		velocity.z = 0.0
@@ -96,3 +112,25 @@ func _quick_turn() -> void:
 
 func face(yaw: float) -> void:
 	rotation.y = yaw
+
+
+func take_hit(from: Vector3) -> void:
+	if health <= 0 or _stagger > 0.0:
+		return
+	health -= 1
+	var away := global_position - from
+	away.y = 0.0
+	_knock = away.normalized() * 3.0 if away.length() > 0.01 else Vector3.ZERO
+	_stagger = 0.6
+	hurt.emit(health)
+	if health <= 0:
+		frozen = true
+		died.emit()
+
+
+func condition() -> String:
+	if health >= 4:
+		return "Fine"
+	if health >= 2:
+		return "Caution"
+	return "Danger"
