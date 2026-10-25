@@ -1,20 +1,23 @@
 extends CharacterBody3D
 ## The reporter. Classic tank controls: turn in place, walk where you face.
 
+signal hurt(health: int)
+signal healed(health: int)
+signal died
+
 const WALK_SPEED := 1.6
 const RUN_SPEED := 3.2
 const BACK_SPEED := 1.0
 const TURN_SPEED := 2.6  # radians per second
 const GRAVITY := 9.8
 const QUICK_TURN_TIME := 0.35
-
-signal hurt(health: int)
-signal died
-
 const MAX_HEALTH := 5
+const SHOVE_COOLDOWN := 4.0
 
 var frozen := false
 var health := MAX_HEALTH
+var running := false
+var shove_cd := 0.0
 var _stagger := 0.0
 var _knock := Vector3.ZERO
 var _quick_turning := false
@@ -61,6 +64,8 @@ func _part(mesh: Mesh, pos: Vector3, color: Color, scale_by := Vector3.ONE) -> M
 
 
 func _physics_process(delta: float) -> void:
+	shove_cd = maxf(0.0, shove_cd - delta)
+	running = false
 	if is_on_floor():
 		velocity.y = 0.0
 	else:
@@ -92,6 +97,7 @@ func _physics_process(delta: float) -> void:
 	var speed := BACK_SPEED
 	if forward > 0.0:
 		speed = RUN_SPEED if Input.is_action_pressed("run") else WALK_SPEED
+		running = speed == RUN_SPEED
 	var dir := -global_transform.basis.z * forward * speed
 	velocity.x = dir.x
 	velocity.z = dir.z
@@ -99,7 +105,7 @@ func _physics_process(delta: float) -> void:
 
 	# A little walk bob
 	var moving := absf(forward) > 0.05
-	_bob = _bob + delta * (12.0 if speed == RUN_SPEED else 7.0) if moving else 0.0
+	_bob = _bob + delta * (12.0 if running else 7.0) if moving else 0.0
 	_body.position.y = absf(sin(_bob)) * 0.04 if moving else 0.0
 
 
@@ -114,10 +120,35 @@ func face(yaw: float) -> void:
 	rotation.y = yaw
 
 
+func face_point(p: Vector3) -> void:
+	var d := p - global_position
+	if Vector2(d.x, d.z).length() > 0.01:
+		rotation.y = atan2(-d.x, -d.z)
+
+
+func can_act() -> bool:
+	return not frozen and _stagger <= 0.0 and not _quick_turning and health > 0
+
+
+func shove(at: Vector3) -> void:
+	shove_cd = SHOVE_COOLDOWN
+	face_point(at)
+	var t := create_tween()
+	t.tween_property(_body, "position:z", -0.25, 0.08)
+	t.tween_property(_body, "position:z", 0.0, 0.2)
+
+
+func heal(amount: int) -> void:
+	health = mini(MAX_HEALTH, health + amount)
+	GameState.health = health
+	healed.emit(health)
+
+
 func take_hit(from: Vector3) -> void:
 	if health <= 0 or _stagger > 0.0:
 		return
 	health -= 1
+	GameState.health = health
 	var away := global_position - from
 	away.y = 0.0
 	_knock = away.normalized() * 3.0 if away.length() > 0.01 else Vector3.ZERO

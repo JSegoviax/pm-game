@@ -12,18 +12,23 @@ Built with Godot 4.7 (Compatibility renderer, GDScript) for desktop browsers fir
 
 ## Controls (tank controls)
 
-| Action | Keyboard | Gamepad |
+| Action | Keyboard | Gamepad (Xbox / Steam Deck) |
 |---|---|---|
 | Walk forward / back | W / S or ↑ / ↓ | D-pad or left stick |
 | Turn left / right | A / D or ← / → | D-pad or left stick |
-| Run | Hold Shift | B / Circle |
-| Quick 180° turn | Hold back, tap Shift | Hold back, tap B / Circle |
-| Open doors, examine | E, Space or Enter | A / Cross |
+| Run | Hold Shift | Hold B |
+| Quick 180° turn | Hold back, tap Shift | Hold back, tap B |
+| Open doors, talk, pick up, shove | E, Space or Enter | A |
+| Items | Tab or I | Y |
+| Back / close | Esc | B |
+| Performance stats on/off | F3 | Back / View |
+
+The version number and performance stats (FPS, CPU and GPU frame time, draw calls, memory) show in the top right.
 
 ## Milestones
 
 - [x] **1. Room prototype:** two rooms, fixed camera angles, tank controls, door transitions
 - [x] **2. Threat:** a resident who is no longer himself, health, getting caught, death and restart
-- [ ] 3. Loop: inventory, a key, the locked door, a safe room and saving
+- [x] **3. Loop:** inventory, a key, the locked door, the Records Room safe room, typewriter saves, onboarding hints
 - [ ] 4. Slice complete: all rooms, the puzzle, residents to talk to, the ending, sound
 - [ ] 5. Polish and ship: web build on jaimesegovia.com

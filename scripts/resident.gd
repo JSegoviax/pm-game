@@ -1,27 +1,38 @@
 extends CharacterBody3D
 ## A resident who is no longer themselves.
-## Idle until you get close, says something almost normal, then follows you.
-## Slow on purpose: you can always walk away. Get too close and it lunges.
+## Idle until you talk to them or get too close. Says something almost normal, then follows you.
+## Slow on purpose: you can always walk away. Get too close and it lunges. A shove stuns it.
 
 signal spoke(text: String, seconds: float)
 signal hit_player
+signal turned_hostile
 
-enum State { IDLE, TALKING, STALKING, WINDUP, LUNGE, RECOVER }
+enum State { IDLE, TALKING, STALKING, WINDUP, LUNGE, RECOVER, STUNNED }
 
-const NOTICE_RANGE := 5.0
+const NOTICE_RANGE := 2.4   # walks up on you without talking first
+const TALK_RANGE := 3.2     # how far away you can start a conversation
 const STALK_SPEED := 1.05
 const LUNGE_TRIGGER := 1.8
 const LUNGE_SPEED := 5.0
 const LUNGE_TIME := 0.32
 const WINDUP_TIME := 0.7
 const RECOVER_TIME := 1.3
+const STUN_TIME := 2.6
 const HIT_RANGE := 0.95
 const TURN_RATE := 4.0
 const GRAVITY := 9.8
+const LINE_TIME := 3.0
 
+## Said when he notices you first.
 @export var lines: PackedStringArray = [
 	"\"Visiting hours ended at eleven. Everyone's downstairs for the meeting.\"",
 	"He keeps smiling. He hasn't blinked once.",
+]
+## Said when you start the conversation.
+@export var talk_lines: PackedStringArray = [
+	"\"Excuse me. I'm with the Courier. I'm looking for whoever's in charge.\"",
+	"He turns around slowly. \"Everyone is in charge. Everyone is downstairs.\"",
+	"\"You should be downstairs too.\" He hasn't blinked once.",
 ]
 
 var target: Node3D
@@ -29,6 +40,7 @@ var bounds: AABB  # the room it can't leave
 var state := State.IDLE
 var _timer := 0.0
 var _hit_this_lunge := false
+var _knock := Vector3.ZERO
 var _body: Node3D
 var _bob := 0.0
 
@@ -83,6 +95,41 @@ func _part(mesh: Mesh, pos: Vector3, color: Color) -> MeshInstance3D:
 	return mi
 
 
+# ---------------------------------------------------------------- public
+
+func can_talk() -> bool:
+	return state == State.IDLE
+
+
+func is_hostile() -> bool:
+	return state in [State.STALKING, State.WINDUP, State.LUNGE, State.RECOVER, State.STUNNED]
+
+
+func engage(by_player: bool) -> void:
+	if state != State.IDLE:
+		return
+	state = State.TALKING
+	_talk(talk_lines if by_player else lines)
+
+
+## Used when loading a save after he has already turned.
+func start_hostile() -> void:
+	state = State.STALKING
+
+
+func stagger(from: Vector3) -> void:
+	if not is_hostile():
+		return
+	state = State.STUNNED
+	_timer = STUN_TIME
+	var away := global_position - from
+	away.y = 0.0
+	_knock = away.normalized() * 4.0 if away.length() > 0.01 else Vector3.ZERO
+	_body.position.y = 0.0
+
+
+# ---------------------------------------------------------------- behavior
+
 func _physics_process(delta: float) -> void:
 	velocity.y = 0.0 if is_on_floor() else velocity.y - GRAVITY * delta
 	velocity.x = 0.0
@@ -100,15 +147,11 @@ func _physics_process(delta: float) -> void:
 	match state:
 		State.IDLE:
 			if target_here and dist < NOTICE_RANGE:
-				state = State.TALKING
-				_timer = 0.0
-				_talk()
+				engage(false)
 		State.TALKING:
 			_face(to_target, delta * 0.6)
 		State.STALKING:
-			if not target_here:
-				_bob = 0.0
-			else:
+			if target_here:
 				_face(to_target, delta)
 				var step := to_target.normalized() * STALK_SPEED
 				velocity.x = step.x
@@ -138,9 +181,16 @@ func _physics_process(delta: float) -> void:
 		State.RECOVER:
 			if _timer <= 0.0:
 				state = State.STALKING
+		State.STUNNED:
+			_knock = _knock.move_toward(Vector3.ZERO, delta * 6.0)
+			velocity.x = _knock.x
+			velocity.z = _knock.z
+			_body.rotation.x = 0.35 * clampf(_timer / STUN_TIME, 0.0, 1.0)  # reeling back
+			if _timer <= 0.0:
+				_body.rotation.x = 0.0
+				state = State.STALKING
 
-	if state == State.STALKING:
-		_body.rotation.z = sin(_bob) * 0.06  # an uneven, wrong walk
+	_body.rotation.z = sin(_bob) * 0.06 if state == State.STALKING else 0.0  # an uneven, wrong walk
 	move_and_slide()
 
 
@@ -151,8 +201,11 @@ func _face(dir: Vector3, weight: float) -> void:
 	rotation.y = lerp_angle(rotation.y, want, clampf(weight * TURN_RATE, 0.0, 1.0))
 
 
-func _talk() -> void:
-	for line in lines:
-		spoke.emit(line, 3.0)
-		await get_tree().create_timer(3.0).timeout
+func _talk(say: PackedStringArray) -> void:
+	for line in say:
+		spoke.emit(line, LINE_TIME)
+		await get_tree().create_timer(LINE_TIME, false).timeout
+		if not is_inside_tree():
+			return
 	state = State.STALKING
+	turned_hostile.emit()

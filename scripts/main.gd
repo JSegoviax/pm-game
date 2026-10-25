@@ -1,52 +1,121 @@
 extends Node3D
-## Milestone 1: two rooms of the compound, fixed camera angles, and a door between them.
-## Rooms are built in code from simple boxes so we can iterate fast before real assets.
+## P.M. — the vertical slice level.
+## Rooms are built in code from simple shapes so we can iterate fast before real assets.
 
 const PLAYER_SCRIPT := preload("res://scripts/player.gd")
 const RESIDENT_SCRIPT := preload("res://scripts/resident.gd")
+const HUD_SCRIPT := preload("res://scripts/hud.gd")
+const INVENTORY_SCRIPT := preload("res://scripts/inventory_ui.gd")
+
 const WALL_H := 4.0
 const WALL_T := 0.3
 const DOOR_REACH := 1.5
+const SHOVE_RANGE := 1.8
+const START_POS := Vector3(0, 0.05, 3.5)
+
+const FOYER := Vector3(0, 0, 0)
+const HALL := Vector3(40, 0, 0)
+const RECORDS := Vector3(80, 0, 0)
 
 var player: CharacterBody3D
-var zones: Array = []   # { "box": AABB, "camera": Camera3D }
-var doors: Array = []   # { "pos": Vector3, "label": String, "locked": bool, "to": Vector3, "yaw": float, "room": String }
-var _current_zone := -1
-var _busy := false
-var _flicker_lights: Array = []
+var hud: CanvasLayer
+var inventory_ui: Control
 
-var _fade: ColorRect
-var _message: Label
-var _prompt: Label
-var _message_timer := 0.0
-var _condition: Label
-var _condition_timer := 0.0
-var _hurt_flash: ColorRect
+var zones: Array = []          # { box, camera, room }
+var interactables: Array = []  # { pos: Callable, range, prompt: Callable, action: Callable }
+var _flicker_lights: Array = []
 var _hallway_bounds: AABB
+var _room := ""
+var _current_zone := -1
+var _started := false
+var _busy := false
 var _dead := false
+var _ui_cd := 0.0
+
+var _music_dread: AudioStreamPlayer
+var _music_calm: AudioStreamPlayer
+
+# Tutorial
+var _tut_step := -1
+var _tut_t := 0.0
+var _tut_from := Vector3.ZERO
+var _tut_run_t := 0.0
+var _interacted := false
 
 
 func _ready() -> void:
 	_build_environment()
 	_build_foyer()
 	_build_hallway()
-	_build_hud()
+	_build_records_room()
+
+	hud = HUD_SCRIPT.new()
+	add_child(hud)
+	inventory_ui = INVENTORY_SCRIPT.new()
+	hud.add_child(inventory_ui)
+	inventory_ui.closed.connect(func() -> void: _ui_cd = 0.25)
+	_setup_audio()
 
 	player = CharacterBody3D.new()
 	player.set_script(PLAYER_SCRIPT)
 	player.name = "Reporter"
 	add_child(player)
-	player.global_position = Vector3(0, 0.05, 3.5)
-	player.face(0.0)  # facing north, into the room
-
+	player.global_position = START_POS
+	player.frozen = true
 	player.hurt.connect(_on_player_hurt)
+	player.healed.connect(func(_h: int) -> void: hud.show_condition(player.condition()))
 	player.died.connect(_on_player_died)
-	_spawn_resident()
-
+	inventory_ui.player = player
+	inventory_ui.hud = hud
 	_update_camera(true)
-	_fade.color.a = 1.0
-	_show_message("Compound of the Quiet Hour\n11:52 P.M.", 3.5)
-	create_tween().tween_property(_fade, "color:a", 0.0, 2.0)
+
+	hud.set_black(true)
+	var mode := GameState.pending
+	GameState.pending = ""
+	if mode == "":
+		mode = await _title_screen()
+	_start(mode)
+
+
+func _title_screen() -> String:
+	var opts := ["New Game"]
+	if GameState.has_save():
+		opts = ["Continue", "New Game"]
+	var i: int = await hud.choose("P.M.", opts, false, "A reporter. An occult compound.\nIt is not empty.", true)
+	return "continue" if opts[i] == "Continue" else "new"
+
+
+func _start(mode: String) -> void:
+	var loaded := mode == "continue" and GameState.load_game()
+	if not loaded:
+		GameState.new_game()
+	player.health = GameState.health
+	if loaded:
+		var p: Array = GameState.spawn.pos
+		player.global_position = Vector3(p[0], p[1], p[2])
+		player.face(GameState.spawn.yaw)
+	else:
+		player.global_position = START_POS
+		player.face(0.0)
+
+	_spawn_pickups()
+	_spawn_resident()
+	_update_camera(true)
+	_music_dread.play()
+	_music_calm.play()
+	_set_music(_room, 0.01)
+	_started = true
+
+	if loaded:
+		hud.show_message("Your notes are where you left them.", 3.0)
+	else:
+		hud.show_message("Compound of the Quiet Hour\n11:52 P.M.", 3.5)
+	hud.fade(0.0, 2.0)
+	if not GameState.tutorial_seen and not GameState.flags.get("tutorial_done", false):
+		_tut_step = 0
+		_tut_t = -3.0
+		_tut_from = player.global_position
+	player.frozen = false
 
 
 # ---------------------------------------------------------------- environment
@@ -104,7 +173,7 @@ func _box(parent: Node3D, size: Vector3, pos: Vector3, mat: Material, collide :=
 	return body
 
 
-func _room(name_: String, center: Vector3, size_x: float, size_z: float, floor_mat: Material, wall_mat: Material) -> Node3D:
+func _room_shell(name_: String, center: Vector3, size_x: float, size_z: float, floor_mat: Material, wall_mat: Material) -> Node3D:
 	var room := Node3D.new()
 	room.name = name_
 	room.position = center
@@ -141,38 +210,81 @@ func _camera(room: Node3D, pos: Vector3, look_at_point: Vector3, fov := 55.0) ->
 	return cam
 
 
-func _zone(room: Node3D, from: Vector3, to: Vector3, cam: Camera3D) -> void:
-	var a := room.global_position + from
-	var b := room.global_position + to
-	var box := AABB(a, Vector3.ZERO).expand(b)
-	zones.append({"box": box, "camera": cam})
+func _zone(room: Node3D, room_name: String, from: Vector3, to: Vector3, cam: Camera3D) -> void:
+	var box := AABB(room.global_position + from, Vector3.ZERO).expand(room.global_position + to)
+	zones.append({"box": box, "camera": cam, "room": room_name})
 
 
-func _door(room: Node3D, local_pos: Vector3, label: String, locked: bool, to := Vector3.ZERO, yaw := 0.0, to_room := "") -> void:
+func _add_interactable(pos: Callable, range_: float, prompt: Callable, action: Callable) -> Dictionary:
+	var entry := {"pos": pos, "range": range_, "prompt": prompt, "action": action}
+	interactables.append(entry)
+	return entry
+
+
+## A door. `lock` is optional: {"key": item id, "flag": unlock flag, "text": message when you lack the key}.
+func _door(room: Node3D, local_pos: Vector3, to: Vector3, yaw: float, to_room: String, lock := {}) -> void:
 	var p := room.global_position + local_pos
-	# Door slab, inset into the wall
+	var side_wall := absf(local_pos.x) > absf(local_pos.z)
 	var slab := _box(self, Vector3(1.3, 2.4, 0.12), p + Vector3(0, 1.2, 0), _mat(Color(0.22, 0.12, 0.08)), false)
-	var facing_wall := absf(local_pos.x) > absf(local_pos.z)
-	if facing_wall:
+	if side_wall:
 		slab.rotation.y = PI / 2
-	_box(self, Vector3(0.08, 0.08, 0.08), p + Vector3(0.45 if not facing_wall else 0.0, 1.1, 0.0 if not facing_wall else 0.45), _mat(Color(0.75, 0.62, 0.30)), false)
-	doors.append({"pos": p, "label": label, "locked": locked, "to": to, "yaw": yaw, "room": to_room})
+	var knob_off := Vector3(0, 1.1, 0.45) if side_wall else Vector3(0.45, 1.1, 0)
+	_box(self, Vector3(0.08, 0.08, 0.08), p + knob_off, _mat(Color(0.75, 0.62, 0.30)), false)
+
+	var d := {"pos": p, "to": to, "yaw": yaw, "room": to_room}
+	d.merge(lock)
+	_add_interactable(
+		func() -> Vector3: return p,
+		DOOR_REACH,
+		func() -> String: return _door_prompt(d),
+		func() -> void: _use_door(d))
+
+
+func _pickup(id: String, pos: Vector3) -> void:
+	if GameState.flags.get("picked_" + id, false):
+		return
+	var node := Node3D.new()
+	add_child(node)
+	node.global_position = pos
+	var mi := MeshInstance3D.new()
+	var mesh := BoxMesh.new()
+	mesh.size = Vector3(0.14, 0.05, 0.08) if GameState.ITEMS[id].kind == "key" else Vector3(0.16, 0.12, 0.16)
+	mi.mesh = mesh
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.85, 0.68, 0.25) if GameState.ITEMS[id].kind == "key" else Color(0.92, 0.92, 0.88)
+	m.emission_enabled = true
+	m.emission = m.albedo_color * 0.4
+	mi.material_override = m
+	node.add_child(mi)
+	var glint := OmniLight3D.new()
+	glint.light_color = Color(1.0, 0.92, 0.7)
+	glint.light_energy = 0.4
+	glint.omni_range = 0.8
+	glint.position.y = 0.15
+	node.add_child(glint)
+	_flicker_lights.append({"light": glint, "base": 0.4, "t": randf() * 10.0})
+
+	var entry := _add_interactable(
+		func() -> Vector3: return pos,
+		1.5,
+		func() -> String: return "Pick up",
+		Callable())
+	entry.action = func() -> void: _take(id, node, entry)
 
 
 # ---------------------------------------------------------------- rooms
 
 func _build_foyer() -> void:
-	var foyer := _room("Foyer", Vector3.ZERO, 12.0, 10.0, _mat(Color(0.30, 0.26, 0.22), true), _mat(Color(0.42, 0.40, 0.36), true))
+	var foyer := _room_shell("Foyer", FOYER, 12.0, 10.0, _mat(Color(0.30, 0.26, 0.22), true), _mat(Color(0.42, 0.40, 0.36), true))
 	var wood := _mat(Color(0.26, 0.16, 0.10))
 	var stone := _mat(Color(0.50, 0.48, 0.44), true)
-	# Pillars
 	for x in [-3.0, 3.0]:
 		_box(foyer, Vector3(0.6, WALL_H, 0.6), Vector3(x, WALL_H / 2, -1.0), stone)
 	# Meeting table with chairs pushed back in a hurry
 	_box(foyer, Vector3(3.2, 0.9, 1.1), Vector3(0, 0.45, -2.6), wood)
 	_box(foyer, Vector3(0.5, 0.9, 0.5), Vector3(-1.2, 0.45, -1.6), wood).rotation.y = 0.5
 	_box(foyer, Vector3(0.5, 0.9, 0.5), Vector3(1.4, 0.45, -3.7), wood).rotation.y = -0.3
-	_box(foyer, Vector3(0.5, 0.45, 0.5), Vector3(2.2, 0.22, -1.2), wood).rotation.z = 1.4  # knocked over
+	_box(foyer, Vector3(0.5, 0.45, 0.5), Vector3(2.2, 0.22, -1.2), wood).rotation.z = 1.4
 	# Reception desk by the entrance
 	_box(foyer, Vector3(2.0, 1.0, 0.7), Vector3(-4.2, 0.5, 3.0), wood)
 	# The sigil on the north wall
@@ -194,22 +306,19 @@ func _build_foyer() -> void:
 
 	var cam_south := _camera(foyer, Vector3(5.4, 3.6, -4.5), Vector3(-1.5, 0.6, 2.0))
 	var cam_north := _camera(foyer, Vector3(-5.4, 3.4, 4.6), Vector3(1.5, 0.8, -2.5))
-	_zone(foyer, Vector3(-6, -1, 0.5), Vector3(6, 4, 5), cam_south)
-	_zone(foyer, Vector3(-6, -1, -5), Vector3(6, 4, 0.5), cam_north)
+	_zone(foyer, "Foyer", Vector3(-6, -1, 0.5), Vector3(6, 4, 5), cam_south)
+	_zone(foyer, "Foyer", Vector3(-6, -1, -5), Vector3(6, 4, 0.5), cam_north)
 
-	# North door leads to the east hallway
-	_door(foyer, Vector3(3.5, 0, -4.94), "East Hallway", false, Vector3(40, 0.05, 6.5), 0.0, "East Hallway")
+	_door(foyer, Vector3(3.5, 0, -4.94), HALL + Vector3(0, 0.05, 6.5), 0.0, "East Hallway")
 
 
 func _build_hallway() -> void:
-	var hall := _room("EastHallway", Vector3(40, 0, 0), 4.0, 16.0, _mat(Color(0.22, 0.24, 0.22), true), _mat(Color(0.34, 0.33, 0.30), true))
+	var hall := _room_shell("EastHallway", HALL, 4.0, 16.0, _mat(Color(0.22, 0.24, 0.22), true), _mat(Color(0.34, 0.33, 0.30), true))
 	var wood := _mat(Color(0.24, 0.15, 0.10))
-	# Benches and a coat rack with coats still on it
 	_box(hall, Vector3(0.6, 0.5, 2.4), Vector3(-1.6, 0.25, 2.0), wood)
 	_box(hall, Vector3(0.6, 0.5, 2.4), Vector3(1.6, 0.25, -3.5), wood)
 	for i in 3:
 		_box(hall, Vector3(0.35, 1.3, 0.12), Vector3(1.75, 1.35, 3.0 + i * 0.5), _mat(Color(0.12, 0.12, 0.14)), false)
-	# Photographs on the wall, all the same smiling group
 	for z in [-6.0, -4.5, -1.0, 1.5]:
 		_box(hall, Vector3(0.05, 0.5, 0.4), Vector3(-1.95, 2.0, z), _mat(Color(0.65, 0.60, 0.50)), false)
 
@@ -218,105 +327,159 @@ func _build_hallway() -> void:
 
 	var cam_south := _camera(hall, Vector3(1.6, 3.4, -7.6), Vector3(-0.2, 0.6, 3.5), 50.0)
 	var cam_north := _camera(hall, Vector3(-1.6, 3.2, 7.6), Vector3(0.2, 0.8, -4.0), 50.0)
-	_zone(hall, Vector3(-2, -1, 0), Vector3(2, 4, 8), cam_south)
-	_zone(hall, Vector3(-2, -1, -8), Vector3(2, 4, 0), cam_north)
+	_zone(hall, "East Hallway", Vector3(-2, -1, 0), Vector3(2, 4, 8), cam_south)
+	_zone(hall, "East Hallway", Vector3(-2, -1, -8), Vector3(2, 4, 0), cam_north)
+	_hallway_bounds = AABB(HALL + Vector3(-2, -1, -8), Vector3(4, 5, 16))
 
-	_hallway_bounds = AABB(hall.global_position + Vector3(-2, -1, -8), Vector3(4, 5, 16))
-
-	_door(hall, Vector3(0, 0, 7.94), "Foyer", false, Vector3(3.5, 0.05, -3.9), PI, "Foyer")
-	_door(hall, Vector3(0, 0, -7.94), "Locked", true)
-
-
-# ---------------------------------------------------------------- HUD
-
-func _build_hud() -> void:
-	var layer := CanvasLayer.new()
-	add_child(layer)
-
-	_message = Label.new()
-	_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_message.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
-	_message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_message.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_message.offset_left = 16
-	_message.offset_right = -16
-	_message.offset_bottom = -18
-	_message.add_theme_font_size_override("font_size", 10)
-	_message.add_theme_color_override("font_shadow_color", Color.BLACK)
-	_message.add_theme_constant_override("shadow_offset_x", 1)
-	_message.add_theme_constant_override("shadow_offset_y", 1)
-	layer.add_child(_message)
-
-	_prompt = Label.new()
-	_prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_prompt.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	_prompt.offset_left = -150
-	_prompt.offset_right = -8
-	_prompt.offset_top = 6
-	_prompt.add_theme_font_size_override("font_size", 9)
-	_prompt.add_theme_color_override("font_color", Color(0.85, 0.75, 0.5))
-	layer.add_child(_prompt)
-
-	_condition = Label.new()
-	_condition.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	_condition.offset_left = 8
-	_condition.offset_top = 6
-	_condition.add_theme_font_size_override("font_size", 10)
-	layer.add_child(_condition)
-
-	_hurt_flash = ColorRect.new()
-	_hurt_flash.color = Color(0.6, 0.0, 0.0, 0.0)
-	_hurt_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hurt_flash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	layer.add_child(_hurt_flash)
-
-	_fade = ColorRect.new()
-	_fade.color = Color(0, 0, 0, 0)
-	_fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_fade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	layer.add_child(_fade)
+	_door(hall, Vector3(0, 0, 7.94), FOYER + Vector3(3.5, 0.05, -3.9), PI, "Foyer")
+	_door(hall, Vector3(0, 0, -7.94), RECORDS + Vector3(0, 0.05, 2.0), 0.0, "Records Room", {
+		"key": "key_east",
+		"flag": "door_records_open",
+		"text": "Locked. Someone has scratched two letters into the wood: P.M.",
+	})
 
 
-func _show_message(text: String, seconds := 2.5) -> void:
-	_message.text = text
-	_message_timer = seconds
+func _build_records_room() -> void:
+	var room := _room_shell("RecordsRoom", RECORDS, 6.0, 6.0, _mat(Color(0.30, 0.20, 0.13), true), _mat(Color(0.30, 0.34, 0.28), true))
+	var wood := _mat(Color(0.32, 0.20, 0.12))
+	# Desk and typewriter
+	_box(room, Vector3(1.6, 0.8, 0.8), Vector3(-1.6, 0.4, -2.2), wood)
+	_box(room, Vector3(0.5, 0.18, 0.4), Vector3(-1.6, 0.89, -2.2), _mat(Color(0.10, 0.10, 0.11)), false)
+	_box(room, Vector3(0.28, 0.02, 0.2), Vector3(-1.6, 1.06, -2.32), _mat(Color(0.92, 0.9, 0.84)), false).rotation.x = -0.9
+	# Filing shelves and a cot
+	_box(room, Vector3(0.5, 2.2, 2.2), Vector3(2.7, 1.1, -1.5), wood)
+	_box(room, Vector3(1.0, 0.4, 2.0), Vector3(2.4, 0.2, 1.8), _mat(Color(0.35, 0.35, 0.40)))
+
+	_light(room, Vector3(-1.4, 2.0, -1.6), Color(1.0, 0.76, 0.45), 1.7, 7.0)
+	_light(room, Vector3(1.5, 3.2, 1.5), Color(1.0, 0.85, 0.65), 0.6, 6.0)
+
+	var cam_a := _camera(room, Vector3(2.6, 3.2, 2.6), Vector3(-1.2, 0.6, -1.6), 60.0)
+	var cam_b := _camera(room, Vector3(-2.6, 3.2, -2.6), Vector3(1.0, 0.5, 1.6), 60.0)
+	_zone(room, "Records Room", Vector3(-3, -1, -3), Vector3(3, 4, 0), cam_a)
+	_zone(room, "Records Room", Vector3(-3, -1, 0), Vector3(3, 4, 3), cam_b)
+
+	_door(room, Vector3(0, 0, 2.94), HALL + Vector3(0, 0.05, -7.0), PI, "East Hallway")
+	_add_interactable(
+		func() -> Vector3: return RECORDS + Vector3(-1.6, 0, -1.7),
+		1.3,
+		func() -> String: return "Use typewriter",
+		_save_prompt)
+
+
+func _spawn_pickups() -> void:
+	_pickup("bandages", FOYER + Vector3(-4.2, 1.05, 3.0))       # on the reception desk
+	_pickup("key_east", HALL + Vector3(1.55, 0.53, -3.5))        # on the bench near him
+
+
+func _spawn_resident() -> void:
+	var r := CharacterBody3D.new()
+	r.set_script(RESIDENT_SCRIPT)
+	r.name = "Resident"
+	add_child(r)
+	r.global_position = HALL + Vector3(0.6, 0.05, -5.8)
+	r.rotation.y = 0.0  # facing the photographs
+	r.target = player
+	r.bounds = _hallway_bounds
+	r.spoke.connect(hud.show_message)
+	r.hit_player.connect(func() -> void: player.take_hit(r.global_position))
+	r.turned_hostile.connect(_on_resident_hostile)
+	if GameState.flags.get("met_resident", false):
+		r.start_hostile()
+
+	_add_interactable(
+		func() -> Vector3: return r.global_position,
+		r.TALK_RANGE,
+		func() -> String: return _resident_prompt(r),
+		func() -> void: _resident_action(r))
+
+
+# ---------------------------------------------------------------- audio
+
+func _setup_audio() -> void:
+	_music_dread = AudioStreamPlayer.new()
+	_music_dread.stream = _make_loop([41.0, 55.0, 58.5, 110.5], [0.22, 0.32, 0.24, 0.10], 1.0 / 3.0, 0.5, 0.02)
+	_music_dread.volume_db = -80.0
+	add_child(_music_dread)
+	_music_calm = AudioStreamPlayer.new()
+	_music_calm.stream = _make_loop([110.0, 220.0, 277.0, 329.5], [0.14, 0.16, 0.10, 0.10], 0.5, 0.35, 0.0)
+	_music_calm.volume_db = -80.0
+	add_child(_music_calm)
+
+
+## Builds a seamless 6-second drone. Frequencies are chosen to complete whole cycles in 6 s.
+func _make_loop(freqs: Array, amps: Array, trem_hz: float, trem_depth: float, noise: float) -> AudioStreamWAV:
+	var rate := 16000
+	var n := rate * 6
+	var data := PackedByteArray()
+	data.resize(n * 2)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	for i in n:
+		var t := float(i) / rate
+		var s := 0.0
+		for k in freqs.size():
+			s += amps[k] * sin(TAU * freqs[k] * t)
+		s *= 1.0 - trem_depth * 0.5 * (1.0 + sin(TAU * trem_hz * t))
+		s += (rng.randf() * 2.0 - 1.0) * noise
+		data.encode_s16(i * 2, int(clampf(s, -1.0, 1.0) * 32767.0 * 0.6))
+	var w := AudioStreamWAV.new()
+	w.format = AudioStreamWAV.FORMAT_16_BITS
+	w.mix_rate = rate
+	w.stereo = false
+	w.data = data
+	w.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	w.loop_begin = 0
+	w.loop_end = n
+	return w
+
+
+func _set_music(room: String, seconds := 2.0) -> void:
+	var safe := room == "Records Room"
+	var t := create_tween().set_parallel(true)
+	t.tween_property(_music_calm, "volume_db", -12.0 if safe else -80.0, seconds)
+	t.tween_property(_music_dread, "volume_db", -80.0 if safe else -14.0, seconds)
 
 
 # ---------------------------------------------------------------- loop
 
 func _physics_process(delta: float) -> void:
-	_update_camera()
-
-	if _message_timer > 0.0:
-		_message_timer -= delta
-		if _message_timer <= 0.0:
-			_message.text = ""
-
-	if _condition_timer > 0.0:
-		_condition_timer -= delta
-		if _condition_timer <= 0.0:
-			_condition.text = ""
-
+	_ui_cd = maxf(0.0, _ui_cd - delta)
+	_flicker_lights = _flicker_lights.filter(func(f) -> bool: return is_instance_valid(f.light))
 	for f in _flicker_lights:
 		f.t += delta
 		var l: OmniLight3D = f.light
 		var dip := 0.15 if fmod(f.t, 3.7) < 0.12 or fmod(f.t, 5.3) < 0.06 else 1.0
 		l.light_energy = f.base * dip * (0.92 + 0.08 * sin(f.t * 23.0))
+	if not _started:
+		return
 
-	var door = _nearest_door()
-	_prompt.text = "" if door == null or _busy else ("[E] Open door" if not door.locked else "[E] Examine door")
-	if door != null and not _busy and not _dead and Input.is_action_just_pressed("interact"):
-		_use_door(door)
+	_update_camera()
+	_tutorial_tick(delta)
 
+	if _busy or _dead:
+		hud.set_prompt("")
+		return
+	if Input.is_action_just_pressed("inventory") and _ui_cd <= 0.0 and player.can_act():
+		hud.set_prompt("")
+		inventory_ui.open()
+		return
 
-func _nearest_door():
-	if player == null:
-		return null
-	for d in doors:
-		var flat := Vector2(player.global_position.x - d.pos.x, player.global_position.z - d.pos.z)
-		if flat.length() < DOOR_REACH:
-			return d
-	return null
+	var best = null
+	var best_d := INF
+	var best_prompt := ""
+	for it in interactables:
+		var p: Vector3 = it.pos.call()
+		var d := Vector2(player.global_position.x - p.x, player.global_position.z - p.z).length()
+		if d <= it.range and d < best_d:
+			var text: String = it.prompt.call()
+			if text != "":
+				best = it
+				best_d = d
+				best_prompt = text
+	hud.set_prompt("" if best == null else "[{interact}] " + best_prompt)
+	if best != null and _ui_cd <= 0.0 and player.can_act() and Input.is_action_just_pressed("interact"):
+		_interacted = true
+		best.action.call()
 
 
 func _update_camera(force := false) -> void:
@@ -328,64 +491,157 @@ func _update_camera(force := false) -> void:
 			if i != _current_zone or force:
 				_current_zone = i
 				(zones[i].camera as Camera3D).make_current()
+				if zones[i].room != _room:
+					_room = zones[i].room
+					if _started:
+						_on_room_entered(_room)
 			return
 
 
+func _on_room_entered(room: String) -> void:
+	_set_music(room)
+	match room:
+		"East Hallway":
+			if not GameState.flags.get("seen_hallway", false):
+				GameState.flags["seen_hallway"] = true
+				await get_tree().create_timer(2.2, false).timeout
+				hud.show_message("Someone is standing at the end of the hall. Facing the wall.", 3.5)
+		"Records Room":
+			if not GameState.flags.get("seen_records", false):
+				GameState.flags["seen_records"] = true
+				await get_tree().create_timer(2.2, false).timeout
+				hud.show_message("Warm light. A typewriter. For the first time tonight, it's quiet.", 4.0)
+
+
+# ---------------------------------------------------------------- interactions
+
+func _door_prompt(d: Dictionary) -> String:
+	if d.has("key") and not GameState.flags.get(d.flag, false):
+		return "Use " + GameState.item_name(d.key) if GameState.has_item(d.key) else "Examine door"
+	return "Open door"
+
+
 func _use_door(d: Dictionary) -> void:
-	if d.locked:
-		_show_message("Locked from the other side. Someone has scratched two letters into the wood: P.M.", 4.0)
+	if d.has("key") and not GameState.flags.get(d.flag, false):
+		if GameState.has_item(d.key):
+			GameState.remove_item(d.key)
+			GameState.flags[d.flag] = true
+			hud.show_message("You used the %s. The door is unlocked." % GameState.item_name(d.key), 3.0)
+		else:
+			hud.show_message(d.text, 4.0)
 		return
 	_busy = true
 	player.frozen = true
-	var t := create_tween()
-	t.tween_property(_fade, "color:a", 1.0, 0.45)
-	await t.finished
-	await get_tree().create_timer(0.9).timeout  # the long door beat
+	await hud.fade(1.0, 0.45).finished
+	await get_tree().create_timer(0.9, false).timeout  # the long door beat
 	player.global_position = d.to
 	player.face(d.yaw)
 	player.velocity = Vector3.ZERO
 	_update_camera(true)
-	var t2 := create_tween()
-	t2.tween_property(_fade, "color:a", 0.0, 0.45)
-	await t2.finished
-	_show_message(d.room, 2.0)
+	await hud.fade(0.0, 0.45).finished
+	hud.show_message(d.room, 2.0)
 	player.frozen = false
 	_busy = false
 
 
-# ---------------------------------------------------------------- threat
-
-func _spawn_resident() -> void:
-	var r := CharacterBody3D.new()
-	r.set_script(RESIDENT_SCRIPT)
-	r.name = "Resident"
-	add_child(r)
-	r.global_position = Vector3(40.6, 0.05, -5.8)
-	r.rotation.y = 0.0  # facing the wall of photographs at the far end
-	r.target = player
-	r.bounds = _hallway_bounds
-	r.spoke.connect(_show_message)
-	r.hit_player.connect(func() -> void: player.take_hit(r.global_position))
+func _take(id: String, node: Node3D, entry: Dictionary) -> void:
+	if not GameState.add_item(id):
+		hud.show_message("You can't carry any more.", 2.5)
+		return
+	GameState.flags["picked_" + id] = true
+	interactables.erase(entry)
+	node.queue_free()
+	hud.show_message("Picked up the %s." % GameState.item_name(id), 2.5)
+	if not GameState.flags.get("hint_inventory", false):
+		GameState.flags["hint_inventory"] = true
+		hud.flash_hint("[{inventory}] Open your items", 5.0)
 
 
-func _on_player_hurt(health: int) -> void:
-	_hurt_flash.color.a = 0.55
-	create_tween().tween_property(_hurt_flash, "color:a", 0.0, 0.6)
-	var c: String = player.condition()
-	_condition.text = "Condition: " + c
-	var colors := {"Fine": Color(0.55, 0.85, 0.5), "Caution": Color(0.95, 0.75, 0.3), "Danger": Color(0.95, 0.3, 0.25)}
-	_condition.add_theme_color_override("font_color", colors[c])
-	_condition_timer = 2.5
+func _resident_prompt(r: Node3D) -> String:
+	if r.can_talk():
+		return "Talk"
+	var d := r.global_position.distance_to(player.global_position)
+	if r.is_hostile() and d <= SHOVE_RANGE and player.shove_cd <= 0.0 and r.state != r.State.STUNNED:
+		return "Shove"
+	return ""
+
+
+func _resident_action(r: Node3D) -> void:
+	if r.can_talk():
+		player.face_point(r.global_position)
+		r.engage(true)
+	elif r.is_hostile():
+		player.shove(r.global_position)
+		r.stagger(player.global_position)
+		hud.show_message("You shove him back. Go.", 1.6)
+
+
+func _on_resident_hostile() -> void:
+	GameState.flags["met_resident"] = true
+	if not GameState.flags.get("hint_shove", false):
+		GameState.flags["hint_shove"] = true
+		hud.flash_hint("You can't win a fight. [{interact}] Shove to break free, then get to a door.", 7.0)
+
+
+func _save_prompt() -> void:
+	_busy = true
+	get_tree().paused = true
+	var i: int = await hud.choose("Type up your notes?", ["Yes", "No"], true, "Saves your progress.")
+	get_tree().paused = false
+	_busy = false
+	_ui_cd = 0.3
+	if i == 0:
+		var ok := GameState.save_game(player.global_position, player.rotation.y, player.health)
+		hud.show_message("You type up tonight's notes. Progress saved." if ok else "The typewriter jams. Couldn't save.", 3.0)
+
+
+func _on_player_hurt(_health: int) -> void:
+	hud.flash()
+	hud.show_condition(player.condition())
 
 
 func _on_player_died() -> void:
 	_dead = true
-	_busy = true
-	_prompt.text = ""
+	hud.set_prompt("")
+	hud.set_hint("")
 	await get_tree().create_timer(0.8).timeout
-	var t := create_tween()
-	t.tween_property(_fade, "color:a", 1.0, 1.6)
-	await t.finished
-	_show_message("The meeting will begin without you.", 4.0)
+	await hud.fade(1.0, 1.6).finished
+	hud.show_message("The meeting will begin without you.", 4.0)
 	await get_tree().create_timer(3.5).timeout
+	GameState.pending = "continue" if GameState.has_save() else "new"
 	get_tree().reload_current_scene()
+
+
+# ---------------------------------------------------------------- tutorial
+
+func _tutorial_tick(delta: float) -> void:
+	if _tut_step < 0:
+		return
+	_tut_t += delta
+	if _tut_t < 0.0:
+		return
+	var done := false
+	match _tut_step:
+		0:
+			hud.set_hint("[{move}] Walk    [{turn}] Turn")
+			done = player.global_position.distance_to(_tut_from) > 1.5
+		1:
+			hud.set_hint("Hold [{run}] to run")
+			if player.running:
+				_tut_run_t += delta
+			done = _tut_run_t > 0.6 or _tut_t > 10.0
+		2:
+			_interacted = false if _tut_t < delta * 1.5 else _interacted
+			hud.set_hint("[{interact}] Open doors, talk to people, pick things up")
+			done = _interacted or _tut_t > 12.0
+		3:
+			hud.set_hint("[{inventory}] Items    [{debug}] Performance stats")
+			done = _tut_t > 6.0
+	if done:
+		_tut_step += 1
+		_tut_t = 0.0
+		if _tut_step > 3:
+			_tut_step = -1
+			hud.set_hint("")
+			GameState.tutorial_seen = true
+			GameState.flags["tutorial_done"] = true
