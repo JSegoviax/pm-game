@@ -7,7 +7,7 @@ extends Node
 ## - The META: what survives. Evidence sent home, facts locked in by that evidence, and the
 ##   compound's memory (doors that stay open). Lives in META_PATH.
 
-const VERSION := "0.4.2"
+const VERSION := "0.5.0"
 const SAVE_PATH := "user://save.json"   # a paused night
 const META_PATH := "user://meta.json"   # everything that carries over
 const MAX_SLOTS := 6
@@ -19,11 +19,49 @@ const ITEMS := {
 		"desc": "A small brass key. A paper tag reads: RECORDS.",
 		"kind": "key",
 	},
+	"key_infirmary": {
+		"name": "Infirmary Key",
+		"desc": "A steel key on a red cord. Stamped: INFIRMARY. STAFF ONLY.",
+		"kind": "key",
+	},
 	"bandages": {
 		"name": "Bandages",
 		"desc": "A clean roll of gauze. Restores your condition a little.",
 		"kind": "heal",
 		"amount": 2,
+	},
+	"pipe": {
+		"name": "Lead Pipe",
+		"desc": "Heavy enough. It won't hold up for long. Hold [{aim}] to ready it, [{interact}] to swing.",
+		"kind": "melee",
+		"damage": 2,
+		"uses": 6,
+		"reach": 1.7,
+	},
+	"fire_axe": {
+		"name": "Fire Axe",
+		"desc": "From an emergency cabinet. Hits hard, and a blow on someone stunned puts them down. It can finish a body on the floor.",
+		"kind": "melee",
+		"damage": 3,
+		"uses": 4,
+		"reach": 1.9,
+	},
+	"revolver": {
+		"name": "Revolver",
+		"desc": "Six chambers, mostly empty. Loud: anyone asleep in the room will wake. Hold [{aim}], then [{interact}] to fire.",
+		"kind": "gun",
+		"damage": 3,
+	},
+	"rounds": {
+		"name": "Revolver Rounds",
+		"desc": "A few loose rounds in a paper sleeve.",
+		"kind": "ammo",
+		"amount": 3,
+	},
+	"lamp_oil": {
+		"name": "Lamp Oil",
+		"desc": "A tin of lamp oil and a book of matches. Enough to burn one body, so it doesn't get back up.",
+		"kind": "finisher",
 	},
 }
 
@@ -44,6 +82,24 @@ const LEADS := {
 		"words": "CHURCH TAKING HUGE DONATIONS FOR THE WORK",
 		"channel": 1,
 	},
+	"lead_benefactors": {
+		"name": "Benefactor roll",
+		"desc": "A leather-bound roll of members by giving. The top names have gold stars and a note: \"Diamond Circle. Separate tonic. Dines with the Founder.\"",
+		"words": "RICH MEMBERS GET SEPARATE TONIC AND THE FOUNDER",
+		"channel": 1,
+	},
+	"lead_batch": {
+		"name": "Batch label",
+		"desc": "Peeled from a crate: \"Batch 41. General membership. Benefactor batches are drawn separately, by hand.\"",
+		"words": "TONIC BOTTLED HERE IN TWO GRADES",
+		"channel": 1,
+	},
+	"lead_reel": {
+		"name": "Sermon reel",
+		"desc": "A reel of tape labeled with last month's date. You know the voice from photographs that are sixty years old.",
+		"words": "FOUNDER VOICE ON TAPE DATED LAST MONTH",
+		"channel": 1,
+	},
 	"lead_shipping": {
 		"name": "Shipping slip",
 		"desc": "A courier slip for twelve crates of \"tonic\" to addresses across the city. Dated this week.",
@@ -55,6 +111,9 @@ const LEADS := {
 # ---------------------------------------------------------------- night state
 
 var inventory: Array[String] = []
+var equipped := ""      # the weapon in hand, or ""
+var wear := {}          # uses left per melee weapon: {"pipe": 4}
+var ammo := 0           # revolver rounds carried
 var flags := {}
 var health := MAX_HEALTH
 var spawn := {}       # {"pos": [x, y, z], "yaw": float} when resuming a paused night
@@ -130,6 +189,9 @@ func reset_all() -> void:
 ## Begins a fresh night with the next reporter.
 func new_night() -> void:
 	inventory.clear()
+	equipped = ""
+	wear = {}
+	ammo = 0
 	flags = {}
 	health = MAX_HEALTH
 	spawn = {}
@@ -211,14 +273,34 @@ func has_item(id: String) -> bool:
 
 
 func add_item(id: String) -> bool:
+	# Rounds go in the revolver's box, not a slot of their own.
+	if ITEMS.get(id, {}).get("kind", "") == "ammo":
+		ammo += int(ITEMS[id].amount)
+		return true
 	if inventory.size() >= MAX_SLOTS:
 		return false
 	inventory.append(id)
+	if ITEMS.get(id, {}).get("kind", "") == "melee":
+		wear[id] = int(ITEMS[id].uses)
+	if equipped == "" and ITEMS.get(id, {}).get("kind", "") in ["melee", "gun"]:
+		equipped = id
 	return true
 
 
 func remove_item(id: String) -> void:
 	inventory.erase(id)
+	wear.erase(id)
+	if equipped == id:
+		equipped = ""
+
+
+## The equipped weapon's name with its state, e.g. "Lead Pipe (4)" or "Revolver: 3 rounds".
+func weapon_label() -> String:
+	if equipped == "":
+		return ""
+	if ITEMS[equipped].kind == "gun":
+		return "%s: %d %s" % [item_name(equipped), ammo, "round" if ammo == 1 else "rounds"]
+	return "%s (%d)" % [item_name(equipped), int(wear.get(equipped, 0))]
 
 
 func item_name(id: String) -> String:
@@ -348,6 +430,9 @@ func save_game(pos: Vector3, yaw: float, hp: int) -> bool:
 		"yaw": yaw,
 		"health": hp,
 		"inventory": inventory.duplicate(),
+		"equipped": equipped,
+		"wear": wear.duplicate(),
+		"ammo": ammo,
 		"flags": flags.duplicate(),
 		"night_seed": night_seed,
 		"leads": leads.duplicate(),
@@ -371,6 +456,11 @@ func load_game() -> bool:
 	if typeof(data) != TYPE_DICTIONARY or not data.has("night_seed"):
 		return false  # saves from before v0.4 can't be resumed
 	inventory.assign(data.get("inventory", []))
+	equipped = str(data.get("equipped", ""))
+	wear = data.get("wear", {})
+	for k in wear:
+		wear[k] = int(wear[k])
+	ammo = int(data.get("ammo", 0))
 	flags = data.get("flags", {})
 	health = int(data.get("health", MAX_HEALTH))
 	spawn = {"pos": data.get("pos", [0, 0, 0]), "yaw": float(data.get("yaw", 0.0))}

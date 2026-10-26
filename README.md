@@ -34,6 +34,26 @@ The version number and performance stats (FPS, CPU and GPU frame time, draw call
 - The typewriter can also pause the night so you can quit and pick it up later. Pausing never protects you from death.
 - **Start over** on the title screen erases everything and begins again from the first reporter.
 
+## The compound (v0.5)
+
+- **Foyer** → East Hallway, Welcome Hall
+- **Welcome Hall** (the benefactors' entrance: donor wall, the founder's portrait) → Chapel
+- **Chapel** (pews, the front rows roped off for benefactors, the altar and speakers) → Infirmary (locked)
+- **Infirmary / tonic lab** → Dormitory (locked; one Infirmary Key opens both doors)
+- **Dormitory** (residents asleep in their bunks) → East Hallway
+- **East Hallway** → Records Room (locked)
+- **Records Room** (safe room, typewriter) → Basement Stairs, down to a chained gate
+
+Items and evidence land on marked spots that change every night. Keys always land where they can be reached.
+
+## Fighting
+
+- **Ready a weapon** from the inventory (picking one up readies it if your hands are empty). Hold **Aim** (Q, right-click, or R1) to raise it: your feet stay planted and you can still turn. Press **interact** to swing or fire.
+- **Lead Pipe** (2 damage, 6 uses) is always somewhere you can reach. **Fire Axe** (3 damage, 4 uses) turns up on about half the nights. Weapons wear out and break.
+- **Revolver** (3 damage) turns up on about a third of nights, with a few rounds. It's loud: sleepers in the same room wake up.
+- **Shove** still stuns. Any hit on a stunned resident counts double, so shove-then-axe puts someone down in one blow.
+- **They get back up.** A downed resident rises again after about 40 seconds, weaker. To stop that, burn the body with **Lamp Oil** or finish it with the **Fire Axe**.
+
 ## Run reports (for troubleshooting)
 
 Every night is recorded to `~/PMRuns` on your computer, like a QA session attached to a bug ticket:
@@ -50,6 +70,16 @@ The file updates every few seconds, so a crash still leaves a record. The newest
 - [x] **2. Threat:** a resident who is no longer himself, health, getting caught, death and restart
 - [x] **3. Loop:** inventory, a key, the locked door, the Records Room safe room, typewriter saves, onboarding hints
 - [x] **Roguelite foundation (v0.4):** seeded nights with separate random streams, spawn markers, evidence and dispatches, the compound's memory, a new reporter per night, event log and first post-mortem
+- [x] **Compound and combat (v0.5):** five new rooms, weapons that wear out, the revolver, residents who get back up unless the body is finished
 - [ ] Night Director (Adaptive / Classic setting)
 - [ ] 4. Slice complete: all rooms, the puzzle, residents to talk to, the ending, sound
 - [ ] 5. Polish and ship: web build on jaimesegovia.com
+
+## Tests
+
+Headless tests live in `tests/` and can be rerun anytime:
+
+```
+godot --headless --path . -s tests/test_compound_and_combat.gd
+godot --headless --path . -s tests/test_recorder.gd
+```

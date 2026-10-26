@@ -133,12 +133,22 @@ func _use() -> void:
 			_refresh("You wrap the worst of it. Better.")
 		"key":
 			_refresh("It goes in a lock somewhere. Use doors and it will be used automatically.")
+		"melee", "gun":
+			GameState.equipped = "" if GameState.equipped == id else id
+			_refresh(("Ready: " + GameState.weapon_label() + ". Hold [{aim}] to raise it.") if GameState.equipped != "" else "You put it away.")
+		"finisher":
+			_refresh("Use it on a body on the floor, before it gets back up.")
 
 
 func _refresh(note: String) -> void:
 	for i in _slots.size():
 		var id: String = GameState.inventory[i] if i < GameState.inventory.size() else ""
-		_slots[i].label.text = GameState.item_name(id) if id != "" else "-"
+		var label := GameState.item_name(id) if id != "" else "-"
+		if id != "" and GameState.ITEMS[id].kind in ["melee", "gun"]:
+			label = GameState.weapon_label() if id == GameState.equipped else label
+			if id == GameState.equipped:
+				label = "> " + label
+		_slots[i].label.text = label
 		_slots[i].panel.add_theme_stylebox_override("panel", _style_sel if i == _sel else _style)
 	var c: String = player.condition()
 	_cond.text = "Condition: " + c
@@ -146,10 +156,10 @@ func _refresh(note: String) -> void:
 	_cond.add_theme_color_override("font_color", colors[c])
 	var id := _selected_id()
 	if note != "":
-		_desc.text = note
+		_desc.text = hud.keys(note)
 	else:
-		_desc.text = GameState.ITEMS[id].desc if id != "" else "Empty."
-	_footer.text = hud.keys("[{interact}] Use    [{inventory}] Close")
+		_desc.text = hud.keys(GameState.ITEMS[id].desc) if id != "" else "Empty."
+	_footer.text = hud.keys("[{interact}] Use / ready    [{inventory}] Close")
 	if GameState.leads.is_empty():
 		_evidence.text = ""
 	else:

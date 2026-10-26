@@ -16,6 +16,19 @@ const START_POS := Vector3(0, 0.05, 3.5)
 const FOYER := Vector3(0, 0, 0)
 const HALL := Vector3(40, 0, 0)
 const RECORDS := Vector3(80, 0, 0)
+const STAIRS := Vector3(120, 0, 0)
+const WELCOME := Vector3(0, 0, 40)
+const CHAPEL := Vector3(40, 0, 40)
+const INFIRMARY := Vector3(80, 0, 40)
+const DORM := Vector3(120, 0, 40)
+
+## One key opens both infirmary doors.
+const INFIRMARY_LOCK := {
+	"key": "key_infirmary",
+	"flag": "door_infirmary_open",
+	"label": "the infirmary door",
+	"text": "Locked. A brass plate: INFIRMARY. STAFF ONLY. Behind it, glass clinks.",
+}
 
 var player: CharacterBody3D
 var hud: CanvasLayer
@@ -24,7 +37,8 @@ var inventory_ui: Control
 var zones: Array = []          # { box, camera, room }
 var interactables: Array = []  # { pos: Callable, range, prompt: Callable, action: Callable }
 var _flicker_lights: Array = []
-var _hallway_bounds: AABB
+var _bounds := {}               # room name -> AABB, so residents stay in their room
+var residents: Array = []
 var _room := ""
 var _current_zone := -1
 var _started := false
@@ -48,6 +62,11 @@ func _ready() -> void:
 	_build_foyer()
 	_build_hallway()
 	_build_records_room()
+	_build_welcome_hall()
+	_build_chapel()
+	_build_infirmary()
+	_build_dormitory()
+	_build_stairs()
 
 	hud = HUD_SCRIPT.new()
 	add_child(hud)
@@ -122,7 +141,7 @@ func _start(mode: String) -> void:
 	else:
 		Recorder.begin(self)
 	_spawn_pickups()
-	_spawn_resident()
+	_spawn_residents()
 	Recorder.flush()
 	_update_camera(true)
 	_music_dread.play()
@@ -287,8 +306,9 @@ func _door(room: Node3D, local_pos: Vector3, to: Vector3, yaw: float, to_room: S
 func _pickup(id: String, pos: Vector3) -> void:
 	if GameState.flags.get("picked_" + id, false):
 		return
-	var is_lead := GameState.LEADS.has(id)
-	var kind: String = "lead" if is_lead else GameState.ITEMS[id].kind
+	var item := id.get_slice("#", 0)   # "rounds#1" is a second copy of "rounds"
+	var is_lead := GameState.LEADS.has(item)
+	var kind: String = "lead" if is_lead else GameState.ITEMS[item].kind
 	var node := Node3D.new()
 	add_child(node)
 	node.global_position = pos
@@ -297,6 +317,8 @@ func _pickup(id: String, pos: Vector3) -> void:
 	match kind:
 		"key": mesh.size = Vector3(0.14, 0.05, 0.08)
 		"lead": mesh.size = Vector3(0.22, 0.01, 0.28)
+		"melee": mesh.size = Vector3(0.7, 0.06, 0.08)
+		"gun": mesh.size = Vector3(0.28, 0.08, 0.12)
 		_: mesh.size = Vector3(0.16, 0.12, 0.16)
 	mi.mesh = mesh
 	if kind == "lead":
@@ -305,6 +327,10 @@ func _pickup(id: String, pos: Vector3) -> void:
 	match kind:
 		"key": m.albedo_color = Color(0.85, 0.68, 0.25)
 		"lead": m.albedo_color = Color(0.86, 0.80, 0.64)
+		"melee": m.albedo_color = Color(0.55, 0.15, 0.12) if item == "fire_axe" else Color(0.50, 0.52, 0.55)
+		"gun": m.albedo_color = Color(0.25, 0.25, 0.27)
+		"ammo": m.albedo_color = Color(0.80, 0.62, 0.30)
+		"finisher": m.albedo_color = Color(0.45, 0.55, 0.30)
 		_: m.albedo_color = Color(0.92, 0.92, 0.88)
 	m.emission_enabled = true
 	m.emission = m.albedo_color * 0.4
@@ -324,6 +350,8 @@ func _pickup(id: String, pos: Vector3) -> void:
 		func() -> String: return "Read" if is_lead else "Pick up",
 		Callable())
 	entry.action = func() -> void: _take(id, node, entry)
+	if kind == "melee":
+		mi.rotation.y = GameState.rng("dressing").randf() * TAU
 
 
 # ---------------------------------------------------------------- rooms
@@ -364,6 +392,7 @@ func _build_foyer() -> void:
 	_zone(foyer, "Foyer", Vector3(-6, -1, -5), Vector3(6, 4, 0.5), cam_north)
 
 	_door(foyer, Vector3(3.5, 0, -4.94), HALL + Vector3(0, 0.05, 6.5), 0.0, "East Hallway")
+	_door(foyer, Vector3(-5.94, 0, -2.5), WELCOME + Vector3(4.0, 0.05, 2.0), PI / 2, "Welcome Hall")
 
 
 func _build_hallway() -> void:
@@ -383,9 +412,10 @@ func _build_hallway() -> void:
 	var cam_north := _camera(hall, Vector3(-1.6, 3.2, 7.6), Vector3(0.2, 0.8, -4.0), 50.0)
 	_zone(hall, "East Hallway", Vector3(-2, -1, 0), Vector3(2, 4, 8), cam_south)
 	_zone(hall, "East Hallway", Vector3(-2, -1, -8), Vector3(2, 4, 0), cam_north)
-	_hallway_bounds = AABB(HALL + Vector3(-2, -1, -8), Vector3(4, 5, 16))
+	_bounds["East Hallway"] = AABB(HALL + Vector3(-2, -1, -8), Vector3(4, 5, 16))
 
 	_door(hall, Vector3(0, 0, 7.94), FOYER + Vector3(3.5, 0.05, -3.9), PI, "Foyer")
+	_door(hall, Vector3(-1.94, 0, 5.2), DORM + Vector3(3.0, 0.05, 2.9), 0.0, "Dormitory")
 	_door(hall, Vector3(0, 0, -7.94), RECORDS + Vector3(0, 0.05, 2.0), 0.0, "Records Room", {
 		"key": "key_east",
 		"flag": "door_records_open",
@@ -414,6 +444,7 @@ func _build_records_room() -> void:
 	_zone(room, "Records Room", Vector3(-3, -1, 0), Vector3(3, 4, 3), cam_b)
 
 	_door(room, Vector3(0, 0, 2.94), HALL + Vector3(0, 0.05, -7.0), PI, "East Hallway")
+	_door(room, Vector3(-2.94, 0, 1.0), STAIRS + Vector3(0, 0.05, 2.8), 0.0, "Basement Stairs")
 	_add_interactable(
 		func() -> Vector3: return RECORDS + Vector3(-1.6, 0, -1.7),
 		1.3,
@@ -428,26 +459,228 @@ func _build_records_room() -> void:
 		_cabinet_action)
 
 
+## The benefactors' entrance. The wealthy members come in here, not through the foyer.
+func _build_welcome_hall() -> void:
+	var room := _room_shell("WelcomeHall", WELCOME, 10.0, 12.0, _mat(Color(0.22, 0.05, 0.06), true), _mat(Color(0.36, 0.30, 0.24), true))
+	var gold := _mat(Color(0.85, 0.66, 0.24))
+	gold.emission_enabled = true
+	gold.emission = Color(0.25, 0.18, 0.05)
+	var leather := _mat(Color(0.30, 0.08, 0.06))
+	var wood := _mat(Color(0.20, 0.11, 0.07))
+	# Red runner to the chapel doors, gold-edged
+	_box(room, Vector3(2.0, 0.02, 11.6), Vector3(0, 0.01, 0), _mat(Color(0.45, 0.06, 0.07)), false)
+	for x in [-1.05, 1.05]:
+		_box(room, Vector3(0.08, 0.025, 11.6), Vector3(x, 0.012, 0), gold, false)
+	# Leather armchairs around a low table
+	for c in [Vector3(-3.0, 0, 0.6), Vector3(-3.0, 0, -1.6), Vector3(-1.9, 0, -0.5)]:
+		_box(room, Vector3(0.9, 0.9, 0.9), c + Vector3(0, 0.45, 0), leather)
+	_box(room, Vector3(0.9, 0.4, 1.4), Vector3(-3.0, 0.2, -0.5), wood)
+	# The donor wall: plaques by tier
+	for row in 3:
+		for i in 5 - row:
+			_box(room, Vector3(0.06, 0.24 - row * 0.04, 0.5 - row * 0.08), Vector3(-4.95, 2.6 - row * 0.5, -3.2 + i * 0.9 + row * 0.4), gold, false)
+	# The founder's portrait over the chapel doors
+	_box(room, Vector3(1.6, 2.0, 0.08), Vector3(0, 2.6, -5.9), gold, false)
+	_box(room, Vector3(1.3, 1.7, 0.1), Vector3(0, 2.6, -5.88), _mat(Color(0.12, 0.10, 0.09)), false)
+	# Velvet rope posts and a check-in lectern
+	for x in [-1.6, 1.6]:
+		_box(room, Vector3(0.12, 1.0, 0.12), Vector3(x, 0.5, -4.2), gold, false)
+	_box(room, Vector3(0.7, 1.1, 0.5), Vector3(3.0, 0.55, 3.5), wood)
+
+	_light(room, Vector3(0, 3.6, 0), Color(1.0, 0.82, 0.5), 2.0, 10.0)
+	_light(room, Vector3(-4.0, 2.2, -2.0), Color(1.0, 0.75, 0.45), 1.0, 5.0, true)
+
+	var cam_a := _camera(room, Vector3(4.4, 3.6, 5.4), Vector3(-1.5, 0.5, -1.5))
+	var cam_b := _camera(room, Vector3(-4.4, 3.5, -5.4), Vector3(1.0, 0.6, 2.5))
+	_zone(room, "Welcome Hall", Vector3(-5, -1, -1), Vector3(5, 4, 6), cam_a)
+	_zone(room, "Welcome Hall", Vector3(-5, -1, -6), Vector3(5, 4, -1), cam_b)
+	_bounds["Welcome Hall"] = AABB(WELCOME + Vector3(-5, -1, -6), Vector3(10, 5, 12))
+
+	_door(room, Vector3(4.94, 0, 2.0), FOYER + Vector3(-5.0, 0.05, -2.5), -PI / 2, "Foyer")
+	_door(room, Vector3(0, 0, -5.94), CHAPEL + Vector3(0, 0.05, 6.8), 0.0, "Chapel")
+
+
+## Where the Quiet Hour is held. The front pews are roped off for the benefactors.
+func _build_chapel() -> void:
+	var room := _room_shell("Chapel", CHAPEL, 10.0, 16.0, _mat(Color(0.26, 0.24, 0.22), true), _mat(Color(0.30, 0.27, 0.26), true))
+	var wood := _mat(Color(0.20, 0.12, 0.08))
+	var velvet := _mat(Color(0.40, 0.05, 0.08))
+	var gold := _mat(Color(0.85, 0.66, 0.24))
+	# Pews either side of the aisle; the first two rows are padded velvet
+	for i in 6:
+		var z := -2.5 + i * 1.6
+		var m: Material = velvet if i < 2 else wood
+		for x in [-2.6, 2.6]:
+			_box(room, Vector3(3.2, 0.5, 0.5), Vector3(x, 0.25, z), m)
+			_box(room, Vector3(3.2, 0.6, 0.1), Vector3(x, 0.8, z + 0.25), m, false)
+	_box(room, Vector3(8.0, 0.06, 0.06), Vector3(0, 0.9, -0.6), gold, false)  # the rope
+	# Altar and the sigil
+	_box(room, Vector3(3.0, 1.0, 1.0), Vector3(0, 0.5, -6.3), _mat(Color(0.75, 0.73, 0.68), true))
+	var sigil := MeshInstance3D.new()
+	var ring := TorusMesh.new()
+	ring.inner_radius = 1.0
+	ring.outer_radius = 1.25
+	ring.rings = 16
+	ring.ring_segments = 6
+	sigil.mesh = ring
+	sigil.material_override = _mat(Color(0.55, 0.05, 0.04))
+	room.add_child(sigil)
+	sigil.position = Vector3(0, 2.7, -7.85)
+	sigil.rotation.x = PI / 2
+	# Speakers high on the walls: the founder's voice during the Quiet Hour
+	for z in [-5.0, 0.0, 5.0]:
+		for x in [-4.8, 4.8]:
+			_box(room, Vector3(0.3, 0.45, 0.35), Vector3(x, 3.3, z), _mat(Color(0.08, 0.08, 0.08)), false)
+	# Candles on the altar
+	for x in [-1.1, -0.4, 0.4, 1.1]:
+		_box(room, Vector3(0.07, 0.3, 0.07), Vector3(x, 1.15, -6.4), _mat(Color(0.95, 0.92, 0.85)), false)
+	_light(room, Vector3(0, 1.7, -6.0), Color(1.0, 0.6, 0.3), 1.6, 7.0, true)
+	_light(room, Vector3(0, 3.6, 3.0), Color(0.75, 0.35, 0.35), 0.8, 9.0)
+
+	var cam_a := _camera(room, Vector3(4.4, 3.7, 7.6), Vector3(-1.0, 0.4, -2.0), 52.0)
+	var cam_b := _camera(room, Vector3(-4.4, 3.6, -7.6), Vector3(1.0, 0.6, 3.0), 55.0)
+	_zone(room, "Chapel", Vector3(-5, -1, -1), Vector3(5, 4, 8), cam_a)
+	_zone(room, "Chapel", Vector3(-5, -1, -8), Vector3(5, 4, -1), cam_b)
+	_bounds["Chapel"] = AABB(CHAPEL + Vector3(-5, -1, -8), Vector3(10, 5, 16))
+
+	_door(room, Vector3(0, 0, 7.94), WELCOME + Vector3(0, 0.05, -5.0), PI, "Welcome Hall")
+	_door(room, Vector3(4.94, 0, -4.0), INFIRMARY + Vector3(-3.2, 0.05, 0.0), -PI / 2, "Infirmary", INFIRMARY_LOCK)
+
+
+## Where the tonic is made and given.
+func _build_infirmary() -> void:
+	var room := _room_shell("Infirmary", INFIRMARY, 8.0, 8.0, _mat(Color(0.58, 0.60, 0.58), true), _mat(Color(0.52, 0.58, 0.54), true))
+	var steel := _mat(Color(0.55, 0.56, 0.58))
+	var sheet := _mat(Color(0.82, 0.84, 0.82))
+	# Beds along the north wall
+	for x in [-2.6, -0.4, 1.8]:
+		_box(room, Vector3(1.0, 0.5, 2.0), Vector3(x, 0.25, -2.8), steel)
+		_box(room, Vector3(0.95, 0.12, 1.9), Vector3(x, 0.56, -2.8), sheet, false)
+		_box(room, Vector3(0.05, 1.8, 0.05), Vector3(x + 0.7, 0.9, -2.0), steel, false)  # drip stand
+	# The bottling table: rows of green tonic
+	_box(room, Vector3(2.6, 0.9, 1.0), Vector3(0, 0.45, 0.6), steel)
+	var tonic := _mat(Color(0.25, 0.75, 0.35))
+	tonic.emission_enabled = true
+	tonic.emission = Color(0.08, 0.35, 0.12)
+	for i in 10:
+		_box(room, Vector3(0.08, 0.2, 0.08), Vector3(-1.1 + i * 0.24, 1.0, 0.45 + (i % 2) * 0.25), tonic, false)
+	# Crates stacked by the dormitory door
+	for c in [Vector3(2.8, 0.3, 3.0), Vector3(2.0, 0.3, 3.2), Vector3(2.5, 0.9, 3.1)]:
+		_box(room, Vector3(0.7, 0.6, 0.6), c, _mat(Color(0.42, 0.32, 0.20)))
+	_light(room, Vector3(0, 3.3, 0), Color(0.8, 1.0, 0.85), 1.2, 8.0, true)
+	_light(room, Vector3(0, 1.4, 0.6), Color(0.35, 1.0, 0.45), 0.6, 3.0)
+
+	var cam_a := _camera(room, Vector3(3.6, 3.4, 3.6), Vector3(-1.2, 0.5, -1.2), 62.0)
+	var cam_b := _camera(room, Vector3(-3.6, 3.4, -3.6), Vector3(1.2, 0.5, 1.4), 62.0)
+	_zone(room, "Infirmary", Vector3(-4, -1, 0), Vector3(4, 4, 4), cam_b)
+	_zone(room, "Infirmary", Vector3(-4, -1, -4), Vector3(4, 4, 0), cam_a)
+	_bounds["Infirmary"] = AABB(INFIRMARY + Vector3(-4, -1, -4), Vector3(8, 5, 8))
+
+	_door(room, Vector3(-3.94, 0, 0), CHAPEL + Vector3(4.2, 0.05, -4.0), PI / 2, "Chapel", INFIRMARY_LOCK)
+	_door(room, Vector3(3.94, 0, 1.6), DORM + Vector3(-5.0, 0.05, -2.0), -PI / 2, "Dormitory", INFIRMARY_LOCK)
+
+
+## The members' bunks. Most of them are asleep. Most of them.
+func _build_dormitory() -> void:
+	var room := _room_shell("Dormitory", DORM, 12.0, 8.0, _mat(Color(0.24, 0.20, 0.16), true), _mat(Color(0.32, 0.30, 0.27), true))
+	var frame := _mat(Color(0.30, 0.30, 0.32))
+	var blanket := _mat(Color(0.36, 0.34, 0.28))
+	for x in [-4.0, -1.8, 0.4, 2.6]:
+		for z in [-2.6, 0.6]:
+			_box(room, Vector3(0.9, 0.45, 2.0), Vector3(x, 0.22, z), frame)
+			_box(room, Vector3(0.85, 0.1, 1.9), Vector3(x, 0.5, z), blanket, false)
+			_box(room, Vector3(0.9, 0.06, 2.0), Vector3(x, 1.5, z), frame, false)  # upper bunk
+	# Lockers along the south wall
+	for i in 6:
+		_box(room, Vector3(0.6, 1.9, 0.5), Vector3(-5.0 + i * 0.65, 0.95, 3.7), _mat(Color(0.28, 0.33, 0.30)))
+	_light(room, Vector3(0, 3.0, -1.0), Color(1.0, 0.85, 0.6), 0.9, 7.0, true)
+
+	var cam_a := _camera(room, Vector3(5.6, 3.4, 3.6), Vector3(-2.0, 0.4, -1.0), 60.0)
+	var cam_b := _camera(room, Vector3(-5.6, 3.4, -3.6), Vector3(2.0, 0.4, 1.0), 60.0)
+	_zone(room, "Dormitory", Vector3(-1, -1, -4), Vector3(6, 4, 4), cam_b)
+	_zone(room, "Dormitory", Vector3(-6, -1, -4), Vector3(-1, 4, 4), cam_a)
+	_bounds["Dormitory"] = AABB(DORM + Vector3(-6, -1, -4), Vector3(12, 5, 8))
+
+	_door(room, Vector3(3.0, 0, 3.94), HALL + Vector3(-1.2, 0.05, 5.2), -PI / 2, "East Hallway")
+	_door(room, Vector3(-5.94, 0, -2.0), INFIRMARY + Vector3(3.2, 0.05, 1.6), PI / 2, "Infirmary", INFIRMARY_LOCK)
+
+
+## Off the Records Room: stairs down to a chained gate. Someone is singing below.
+func _build_stairs() -> void:
+	var room := Node3D.new()
+	room.name = "BasementStairs"
+	room.position = STAIRS
+	add_child(room)
+	var stone := _mat(Color(0.30, 0.29, 0.27), true)
+	var dark := _mat(Color(0.18, 0.17, 0.16), true)
+	# Landing at the top, a ramp down (with step shapes on it), and the bottom landing
+	_box(room, Vector3(4.0, 0.2, 4.0), Vector3(0, -0.1, 2.0), stone)
+	var ramp := _box(room, Vector3(4.0, 0.2, 4.6), Vector3(0, -1.25, -1.9), stone)
+	ramp.rotation.x = -atan2(2.4, 4.0)
+	for i in 8:
+		_box(room, Vector3(3.9, 0.3, 0.5), Vector3(0, -0.15 - i * 0.3, -0.25 - i * 0.5), dark, false)
+	_box(room, Vector3(4.0, 0.2, 2.6), Vector3(0, -2.5, -5.3), stone)
+	# Walls and ceiling
+	for x in [-2.15, 2.15]:
+		_box(room, Vector3(0.3, 7.0, 13.0), Vector3(x, 0.8, -2.0), stone)
+	_box(room, Vector3(4.6, 7.0, 0.3), Vector3(0, 0.8, 4.15), stone)
+	_box(room, Vector3(4.6, 7.0, 0.3), Vector3(0, 0.8, -6.75), stone)
+	_box(room, Vector3(4.6, 0.2, 13.0), Vector3(0, 4.1, -2.0), stone, false)
+	# The gate: bars and a new chain
+	for i in 9:
+		_box(room, Vector3(0.06, 2.6, 0.06), Vector3(-1.6 + i * 0.4, -1.1, -6.0), _mat(Color(0.20, 0.20, 0.22)))
+	_box(room, Vector3(0.5, 0.5, 0.1), Vector3(0, -1.2, -5.94), _mat(Color(0.65, 0.65, 0.68)), false)
+	_light(room, Vector3(0, 3.0, 2.5), Color(1.0, 0.8, 0.55), 1.3, 7.0, true)
+	_light(room, Vector3(0, 0.6, -2.0), Color(1.0, 0.75, 0.5), 0.7, 5.0)
+	_light(room, Vector3(0, -1.0, -6.5), Color(0.9, 0.3, 0.2), 0.5, 4.0)
+
+	# From beside the gate, looking up the stairs at whoever comes down
+	var cam := _camera(room, Vector3(1.6, -0.6, -6.3), Vector3(-0.3, 0.4, 2.5), 62.0)
+	_zone(room, "Basement Stairs", Vector3(-2, -3.5, -6.6), Vector3(2, 4, 4), cam)
+	_bounds["Basement Stairs"] = AABB(STAIRS + Vector3(-2, -3.5, -6.6), Vector3(4, 7.5, 10.6))
+
+	_door(room, Vector3(0, 0, 3.94), RECORDS + Vector3(-2.2, 0.05, 1.0), -PI / 2, "Records Room")
+	_add_interactable(
+		func() -> Vector3: return STAIRS + Vector3(0, -2.4, -5.5),
+		1.6,
+		func() -> String: return "Examine gate",
+		func() -> void: hud.show_message("A chain as thick as your wrist, and new. Somewhere below, a choir is singing. One voice is much older than the others.", 5.0))
+
+
 ## Marked spots, Rogue Legacy style: rooms are hand-built and always the same; what sits on
-## these spots changes every night. `before_lock` spots can be reached without the Brass Key,
-## so the key always lands on one of them and every night can be finished.
+## these spots changes every night. `needs` lists the locked doors between the front door and
+## the spot, so keys can always be placed where they can be reached: every night is finishable.
+const LOCK_RECORDS := "door_records_open"
+const LOCK_INFIRMARY := "door_infirmary_open"
 const MARKERS := [
-	{"id": "foyer_desk", "pos": FOYER + Vector3(-4.2, 1.05, 3.0), "before_lock": true},
-	{"id": "foyer_table", "pos": FOYER + Vector3(0.8, 0.93, -2.6), "before_lock": true},
-	{"id": "foyer_floor", "pos": FOYER + Vector3(4.6, 0.06, 1.5), "before_lock": true},
-	{"id": "hall_bench_n", "pos": HALL + Vector3(1.55, 0.53, -3.5), "before_lock": true},
-	{"id": "hall_bench_s", "pos": HALL + Vector3(-1.55, 0.53, 2.6), "before_lock": true},
-	{"id": "records_desk", "pos": RECORDS + Vector3(-1.0, 0.83, -2.1), "before_lock": false},
-	{"id": "records_cot", "pos": RECORDS + Vector3(2.4, 0.43, 1.4), "before_lock": false},
+	{"id": "foyer_desk", "pos": FOYER + Vector3(-4.2, 1.05, 3.0), "needs": []},
+	{"id": "foyer_table", "pos": FOYER + Vector3(0.8, 0.93, -2.6), "needs": []},
+	{"id": "foyer_floor", "pos": FOYER + Vector3(4.6, 0.06, 1.5), "needs": []},
+	{"id": "hall_bench_n", "pos": HALL + Vector3(1.55, 0.53, -3.5), "needs": []},
+	{"id": "hall_bench_s", "pos": HALL + Vector3(-1.55, 0.53, 2.6), "needs": []},
+	{"id": "welcome_lectern", "pos": WELCOME + Vector3(3.0, 1.13, 3.5), "needs": []},
+	{"id": "welcome_table", "pos": WELCOME + Vector3(-3.0, 0.43, -0.5), "needs": []},
+	{"id": "welcome_floor", "pos": WELCOME + Vector3(3.8, 0.06, -4.6), "needs": []},
+	{"id": "chapel_altar", "pos": CHAPEL + Vector3(0.9, 1.03, -6.2), "needs": []},
+	{"id": "chapel_pew", "pos": CHAPEL + Vector3(-3.2, 0.53, 2.3), "needs": []},
+	{"id": "dorm_locker", "pos": DORM + Vector3(-1.2, 0.06, 3.1), "needs": []},
+	{"id": "dorm_bunk", "pos": DORM + Vector3(2.6, 1.56, -2.6), "needs": []},
+	{"id": "records_desk", "pos": RECORDS + Vector3(-1.0, 0.83, -2.1), "needs": [LOCK_RECORDS]},
+	{"id": "records_cot", "pos": RECORDS + Vector3(2.4, 0.43, 1.4), "needs": [LOCK_RECORDS]},
+	{"id": "stairs_landing", "pos": STAIRS + Vector3(1.2, -2.34, -5.0), "needs": [LOCK_RECORDS]},
+	{"id": "infirmary_table", "pos": INFIRMARY + Vector3(0.9, 0.93, 0.6), "needs": [LOCK_INFIRMARY]},
+	{"id": "infirmary_bed", "pos": INFIRMARY + Vector3(-2.6, 0.63, -2.8), "needs": [LOCK_INFIRMARY]},
+	{"id": "infirmary_crates", "pos": INFIRMARY + Vector3(2.5, 1.23, 3.1), "needs": [LOCK_INFIRMARY]},
 ]
 
 
 func _spawn_pickups() -> void:
 	var free := MARKERS.duplicate()
-	# Every spot is always drawn in the same order, even for things that won't appear, so a
-	# resumed night rebuilds exactly as it was.
-	var place := func(id: String, early_only: bool, show: bool) -> void:
-		var pool := free.filter(func(m) -> bool: return m.before_lock or not early_only)
+	var r := GameState.rng("items")
+	# Everything is always drawn in the same order, including chances and things that won't
+	# appear, so a resumed night rebuilds exactly as it was.
+	var place := func(id: String, ok: Callable, show: bool) -> void:
+		var pool := free.filter(ok)
 		var m = GameState.pick("items", pool)
 		if m == null:
 			return
@@ -455,36 +688,123 @@ func _spawn_pickups() -> void:
 		if show:
 			_pickup(id, m.pos)
 			Recorder.placed[id] = m.id
+	var anywhere := func(_m) -> bool: return true
+	var no_locks := func(m) -> bool: return m.needs.is_empty()
+	var not_behind := func(lock: String) -> Callable:
+		return func(m) -> bool: return not m.needs.has(lock)
+	var only_behind := func(lock: String) -> Callable:
+		return func(m) -> bool: return m.needs.has(lock)
+	var chance := func(p: float) -> bool: return r.randf() < p
 
-	# The key first, on a spot you can reach. Once the door is open for good, no key is needed.
-	place.call("key_east", true, not GameState.world("door_records_open"))
-	place.call("bandages", false, true)
+	# Keys first: the Records key outside every lock; the infirmary key outside the infirmary.
+	# Once a door is open for good, its key isn't needed (or placed).
+	place.call("key_east", no_locks, not GameState.world(LOCK_RECORDS))
+	place.call("key_infirmary", not_behind.call(LOCK_INFIRMARY), not GameState.world(LOCK_INFIRMARY))
+	# The most constrained things go next, while their spots are still free.
+	place.call("lead_batch", only_behind.call(LOCK_INFIRMARY), not GameState.is_sent("lead_batch") or GameState.flags.get("picked_lead_batch", false))
+	# Something to fight with is always within reach; the rest is luck.
+	place.call("pipe", no_locks, true)
+	var axe: bool = chance.call(0.5)
+	var gun: bool = chance.call(0.35)
+	var rounds: int = (1 + int(chance.call(0.5))) if gun else int(chance.call(0.25))
+	var extra_oil: bool = chance.call(0.35)
+	place.call("fire_axe", anywhere, axe)
+	place.call("revolver", anywhere, gun)
+	for i in 2:
+		place.call("rounds#%d" % i, anywhere, i < rounds)
+	place.call("lamp_oil", anywhere, true)
+	place.call("lamp_oil#2", anywhere, extra_oil)
+	place.call("bandages", anywhere, true)
 	# Evidence the office doesn't have yet. Sent leads don't come back.
-	for id in ["lead_code", "lead_ledger"]:
-		place.call(id, false, not GameState.is_sent(id) or GameState.flags.get("picked_" + id, false))
+	var leads := [
+		["lead_code", anywhere],
+		["lead_ledger", anywhere],
+		["lead_benefactors", anywhere],
+		["lead_reel", anywhere],
+	]
+	for l in leads:
+		var id: String = l[0]
+		place.call(id, l[1], not GameState.is_sent(id) or GameState.flags.get("picked_" + id, false))
 
 
-func _spawn_resident() -> void:
+## Who is where tonight. Each room has a few spots and a chance; the hallway always has someone.
+const CAST := [
+	{"id": "hall", "kind": "member", "room": "East Hallway", "chance": 1.0, "spots": [
+		[HALL + Vector3(0.6, 0.05, -5.8), 0.0], [HALL + Vector3(-1.3, 0.05, -1.0), PI / 2], [HALL + Vector3(1.2, 0.05, -1.8), -PI / 2]]},
+	{"id": "benefactor", "kind": "benefactor", "room": "Welcome Hall", "chance": 0.6, "spots": [
+		[WELCOME + Vector3(0.0, 0.05, -3.4), PI], [WELCOME + Vector3(-3.6, 0.05, -2.8), PI / 2]]},
+	{"id": "chapel", "kind": "worshipper", "room": "Chapel", "chance": 0.7, "spots": [
+		[CHAPEL + Vector3(0.0, 0.05, -5.0), 0.0], [CHAPEL + Vector3(-0.6, 0.05, -1.4), 0.0]]},
+	{"id": "nurse", "kind": "nurse", "room": "Infirmary", "chance": 0.7, "spots": [
+		[INFIRMARY + Vector3(0.0, 0.05, -0.4), 0.0], [INFIRMARY + Vector3(-1.5, 0.05, -1.6), PI]]},
+	{"id": "sleeper_a", "kind": "sleeper", "room": "Dormitory", "chance": 1.0, "spots": [
+		[DORM + Vector3(-1.8, 0.05, -2.6), 0.0], [DORM + Vector3(0.4, 0.05, 0.6), 0.0]]},
+	{"id": "sleeper_b", "kind": "sleeper", "room": "Dormitory", "chance": 0.5, "spots": [
+		[DORM + Vector3(-4.0, 0.05, 0.6), 0.0], [DORM + Vector3(2.6, 0.05, 0.6), 0.0]]},
+]
+
+const TALK := {
+	"member": {
+		"notice": ["\"Visiting hours ended at eleven. Everyone's downstairs for the meeting.\"", "He keeps smiling. He hasn't blinked once."],
+		"talk": ["\"Excuse me. I'm with the Courier. I'm looking for whoever's in charge.\"", "He turns around slowly. \"Everyone is in charge. Everyone is downstairs.\"", "\"You should be downstairs too.\" He hasn't blinked once."],
+	},
+	"benefactor": {
+		"notice": [],
+		"talk": ["\"You're not a member. You're certainly not one of us.\" He straightens a gold pin.", "\"We don't take the general tonic, you understand. Ours is drawn by hand.\"", "\"The Founder dines with us on Sundays. He's looking wonderfully well.\""],
+	},
+	"worshipper": {
+		"notice": ["She's kneeling toward the altar, whispering a count. She doesn't stop.", "\"It's nearly the Quiet Hour. You should kneel.\""],
+		"talk": ["\"Excuse me. Who's in charge here?\"", "\"He is.\" She points at the speakers without looking up. \"He'll speak soon.\"", "\"You should kneel.\" She's standing now."],
+	},
+	"nurse": {
+		"notice": ["\"Visiting hours are over. Are you here for your dose?\"", "She's already filling a syringe. It's green."],
+		"talk": ["\"I'm not a patient. I'm a reporter.\"", "\"Everyone's a patient.\" She taps the syringe. \"Sleeve up.\""],
+	},
+	"sleeper": {"notice": [], "talk": []},
+}
+
+
+func _spawn_residents() -> void:
+	var r := GameState.rng("residents")
+	for c in CAST:
+		var here: bool = r.randf() < float(c.chance)
+		var spot: Array = GameState.pick("residents", c.spots)
+		if not here:
+			continue
+		_spawn_resident(c, spot[0], spot[1])
+
+
+func _spawn_resident(c: Dictionary, pos: Vector3, yaw: float) -> void:
 	var r := CharacterBody3D.new()
 	r.set_script(RESIDENT_SCRIPT)
-	r.name = "Resident"
+	r.name = "Resident_" + c.id
+	r.kind = c.kind
+	r.resident_id = c.id
+	r.lines = PackedStringArray(TALK[c.kind].notice)
+	r.talk_lines = PackedStringArray(TALK[c.kind].talk)
 	add_child(r)
-	# Where he stands tonight, from the residents' own stream
-	var spot: Dictionary = GameState.pick("residents", [
-		{"pos": Vector3(0.6, 0.05, -5.8), "yaw": 0.0},        # facing the far wall
-		{"pos": Vector3(-1.3, 0.05, -1.0), "yaw": PI / 2},    # facing the photographs
-		{"pos": Vector3(1.2, 0.05, -1.8), "yaw": -PI / 2},    # facing the sign-in sheets
-	])
-	r.global_position = HALL + spot.pos
-	r.rotation.y = spot.yaw
-	Recorder.placed["resident"] = "hall (%.1f, %.1f)" % [spot.pos.x, spot.pos.z]
+	r.add_to_group("residents")
+	residents.append(r)
+	r.global_position = pos
+	r.rotation.y = yaw
+	Recorder.placed["resident_" + c.id] = "%s (%.1f, %.1f)" % [c.room, pos.x, pos.z]
 	r.target = player
-	r.bounds = _hallway_bounds
+	r.bounds = _bounds[c.room]
 	r.spoke.connect(hud.show_message)
 	r.hit_player.connect(func() -> void: player.take_hit(r.global_position))
-	r.turned_hostile.connect(_on_resident_hostile)
-	if GameState.flags.get("met_resident", false):
+	r.turned_hostile.connect(func() -> void: _on_resident_hostile(r))
+	r.went_down.connect(func() -> void: _on_resident_down(r))
+	r.rose.connect(func() -> void:
+		GameState.log_event("resident_rose", {"who": r.resident_id})
+		if _room == c.room:
+			hud.show_message("He's getting up.", 2.0))
+	var dead: String = str(GameState.flags.get("dead_" + c.id, ""))
+	if dead != "":
+		r.start_dead(dead)
+	elif GameState.flags.get("met_" + c.id, false):
 		r.start_hostile()
+	elif c.kind == "sleeper":
+		r.start_asleep()
 
 	_add_interactable(
 		func() -> Vector3: return r.global_position,
@@ -560,12 +880,21 @@ func _physics_process(delta: float) -> void:
 
 	if _busy or _dead:
 		hud.set_prompt("")
+		hud.set_weapon("")
 		return
-	if Input.is_action_just_pressed("inventory") and _ui_cd <= 0.0 and player.can_act():
+	if Input.is_action_just_pressed("inventory") and _ui_cd <= 0.0 and player.can_act() and not player.aiming:
 		hud.set_prompt("")
 		GameState.log_event("inventory", {})
 		inventory_ui.open()
 		return
+
+	if player.aiming:
+		hud.set_weapon(GameState.weapon_label())
+		hud.set_prompt(_attack_prompt())
+		if Input.is_action_just_pressed("interact") and player.attack_cd <= 0.0 and _ui_cd <= 0.0:
+			_attack()
+		return
+	hud.set_weapon("")
 
 	var best = null
 	var best_d := INF
@@ -657,7 +986,8 @@ func _use_door(d: Dictionary) -> void:
 	_busy = false
 
 
-func _take(id: String, node: Node3D, entry: Dictionary) -> void:
+func _take(slot: String, node: Node3D, entry: Dictionary) -> void:
+	var id := slot.get_slice("#", 0)
 	if GameState.LEADS.has(id):
 		GameState.add_lead(id)
 		GameState.flags["picked_" + id] = true
@@ -668,42 +998,219 @@ func _take(id: String, node: Node3D, entry: Dictionary) -> void:
 	if not GameState.add_item(id):
 		hud.show_message("You can't carry any more.", 2.5)
 		return
-	GameState.flags["picked_" + id] = true
+	GameState.flags["picked_" + slot] = true
 	GameState.log_event("pickup", {"id": id})
 	interactables.erase(entry)
 	node.queue_free()
 	hud.show_message("Picked up the %s." % GameState.item_name(id), 2.5)
+	var kind: String = GameState.ITEMS[id].kind
+	if kind in ["melee", "gun"] and not GameState.meta.get("hint_aim", false):
+		GameState.meta["hint_aim"] = true
+		GameState.save_meta()
+		hud.flash_hint("Hold [{aim}] to raise the %s. [{interact}] while raised to %s." % [GameState.item_name(id), "fire" if kind == "gun" else "swing"], 8.0)
+		return
 	if not GameState.flags.get("hint_inventory", false):
 		GameState.flags["hint_inventory"] = true
 		hud.flash_hint("[{inventory}] Open your items", 5.0)
 
 
 func _resident_prompt(r: Node3D) -> String:
-	if r.can_talk():
-		return "Talk"
 	var d := r.global_position.distance_to(player.global_position)
+	if r.is_dead() or r.state == r.State.ASLEEP:
+		return ""
+	if r.is_down():
+		if d > 1.7:
+			return ""
+		if GameState.has_item("lamp_oil"):
+			return "Burn the body"
+		if GameState.has_item("fire_axe"):
+			return "Finish with the axe"
+		return "Examine"
+	if r.can_talk() and r.talk_lines.size() > 0:
+		return "Talk"
 	if r.is_hostile() and d <= SHOVE_RANGE and player.shove_cd <= 0.0 and r.state != r.State.STUNNED:
 		return "Shove"
 	return ""
 
 
 func _resident_action(r: Node3D) -> void:
-	if r.can_talk():
+	if r.is_down():
+		_finish_body(r)
+	elif r.can_talk():
 		player.face_point(r.global_position)
-		GameState.log_event("talk", {"who": "resident"})
+		GameState.log_event("talk", {"who": r.resident_id})
 		r.engage(true)
 	elif r.is_hostile():
-		GameState.log_event("shove", {})
+		GameState.log_event("shove", {"who": r.resident_id})
 		player.shove(r.global_position)
 		r.stagger(player.global_position)
 		hud.show_message("You shove him back. Go.", 1.6)
 
 
-func _on_resident_hostile() -> void:
-	GameState.flags["met_resident"] = true
+## Ends a downed resident for the night, so he doesn't get back up.
+func _finish_body(r: Node3D) -> void:
+	player.face_point(r.global_position)
+	if GameState.has_item("lamp_oil"):
+		GameState.remove_item("lamp_oil")
+		r.finish("burned")
+		GameState.flags["dead_" + r.resident_id] = "burned"
+		GameState.log_event("finished", {"who": r.resident_id, "how": "burned"})
+		hud.show_message("You pour the oil and strike a match. He doesn't make a sound. That's the worst part.", 4.0)
+	elif GameState.has_item("fire_axe"):
+		r.finish("axe")
+		GameState.flags["dead_" + r.resident_id] = "axe"
+		GameState.log_event("finished", {"who": r.resident_id, "how": "axe"})
+		_wear("fire_axe")
+		hud.show_message("One blow. You don't look at what you did.", 3.5)
+	else:
+		hud.show_message("He isn't breathing. He wasn't breathing before, either. He won't stay down.", 4.0)
+
+
+func _on_resident_hostile(r: Node3D) -> void:
+	GameState.flags["met_" + r.resident_id] = true
+	GameState.log_event("resident_hostile", {"who": r.resident_id})
 	if not GameState.flags.get("hint_shove", false):
 		GameState.flags["hint_shove"] = true
-		hud.flash_hint("You can't win a fight. [{interact}] Shove to break free, then get to a door.", 7.0)
+		var how := "[{interact}] Shove to break free"
+		if GameState.equipped != "":
+			how = "Hold [{aim}] and [{interact}] to fight, or [{interact}] Shove to break free"
+		hud.flash_hint(how + ", then get to a door.", 7.0)
+
+
+func _on_resident_down(r: Node3D) -> void:
+	GameState.log_event("resident_down", {"who": r.resident_id})
+	if not GameState.meta.get("hint_finish", false):
+		GameState.meta["hint_finish"] = true
+		GameState.save_meta()
+		hud.flash_hint("He'll get back up. Burn the body with lamp oil, or finish it with an axe.", 8.0)
+	else:
+		hud.show_message("He goes down.", 1.5)
+
+
+# ---------------------------------------------------------------- fighting
+
+## The resident in front of you, if any: closest one inside `reach`, within the cone `min_dot`.
+func _aim_target(reach: float, min_dot: float) -> Node3D:
+	var fwd := -player.global_transform.basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	var best: Node3D = null
+	var best_d := INF
+	for r in residents:
+		if not is_instance_valid(r) or not r.is_target():
+			continue
+		var to: Vector3 = r.global_position - player.global_position
+		to.y = 0.0
+		var d := to.length()
+		if d > reach or d < 0.01:
+			continue
+		if fwd.dot(to / d) < min_dot:
+			continue
+		if d < best_d:
+			best = r
+			best_d = d
+	return best
+
+
+func _attack_prompt() -> String:
+	var w := GameState.equipped
+	if w == "":
+		return ""
+	if GameState.ITEMS[w].kind == "gun":
+		return "[{interact}] Fire" if GameState.ammo > 0 else "No rounds"
+	return "[{interact}] Swing"
+
+
+func _attack() -> void:
+	var w := GameState.equipped
+	var item: Dictionary = GameState.ITEMS[w]
+	if item.kind == "gun":
+		if GameState.ammo <= 0:
+			hud.show_message("Click. Empty.", 1.5)
+			GameState.log_event("dry_fire", {})
+			player.attack_cd = 0.5
+			return
+		GameState.ammo -= 1
+		player.attack_motion(true)
+		_gunshot()
+		for r in residents:
+			if is_instance_valid(r):
+				r.hear(player.global_position)
+		var t := _aim_target(11.0, 0.93)
+		GameState.log_event("shot", {"hit": t.resident_id if t else "", "rounds_left": GameState.ammo})
+		if t:
+			var down: bool = t.damage(int(item.damage), player.global_position)
+			_hit_flash(t)
+			if not down:
+				hud.show_message("He jerks back. He keeps coming.", 1.5)
+		if GameState.ammo == 0:
+			hud.flash_hint("That was the last round.", 3.0)
+		return
+
+	player.attack_motion(false)
+	var t := _aim_target(float(item.reach), 0.5)
+	GameState.log_event("swing", {"weapon": w, "hit": t.resident_id if t else ""})
+	if t == null:
+		return
+	var stunned: bool = t.state == t.State.STUNNED
+	t.damage(int(item.damage), player.global_position)
+	_hit_flash(t)
+	if stunned and w == "fire_axe" and t.is_down():
+		hud.show_message("While he reels, you bring the axe down.", 2.0)
+	_wear(w)
+
+
+## One use off a melee weapon. When it's worn out, it breaks.
+func _wear(w: String) -> void:
+	if not GameState.wear.has(w):
+		return
+	GameState.wear[w] = int(GameState.wear[w]) - 1
+	if GameState.wear[w] <= 0:
+		GameState.remove_item(w)
+		GameState.log_event("broke", {"weapon": w})
+		hud.show_message("The %s gives out. Useless now." % GameState.item_name(w).to_lower(), 2.5)
+
+
+func _hit_flash(r: Node3D) -> void:
+	var l := OmniLight3D.new()
+	l.light_color = Color(1.0, 0.3, 0.2)
+	l.light_energy = 1.5
+	l.omni_range = 1.5
+	l.position = Vector3(0, 1.3, 0)
+	r.add_child(l)
+	create_tween().tween_property(l, "light_energy", 0.0, 0.25).finished.connect(l.queue_free)
+
+
+var _shot_sound: AudioStreamPlayer
+
+func _gunshot() -> void:
+	if _shot_sound == null:
+		_shot_sound = AudioStreamPlayer.new()
+		var rate := 16000
+		var n := rate / 3
+		var data := PackedByteArray()
+		data.resize(n * 2)
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 11
+		for i in n:
+			var env := exp(-float(i) / (rate * 0.05))
+			var v := (rng.randf() * 2.0 - 1.0) * env + sin(TAU * 70.0 * i / rate) * env * 0.6
+			data.encode_s16(i * 2, int(clampf(v, -1.0, 1.0) * 32767.0 * 0.8))
+		var wav := AudioStreamWAV.new()
+		wav.format = AudioStreamWAV.FORMAT_16_BITS
+		wav.mix_rate = rate
+		wav.data = data
+		_shot_sound.stream = wav
+		_shot_sound.volume_db = -4.0
+		add_child(_shot_sound)
+	_shot_sound.play()
+	var flash := OmniLight3D.new()
+	flash.light_color = Color(1.0, 0.85, 0.5)
+	flash.light_energy = 4.0
+	flash.omni_range = 6.0
+	add_child(flash)
+	flash.global_position = player.global_position + Vector3(0, 1.3, 0) - player.global_transform.basis.z * 0.6
+	create_tween().tween_property(flash, "light_energy", 0.0, 0.08).finished.connect(flash.queue_free)
 
 
 ## Shows a lead you just found, then files it in the notebook.

@@ -16,7 +16,8 @@ const SAMPLE_EVERY := 0.2   # seconds between trail samples
 const FLUSH_EVERY := 5.0    # seconds between writes to disk
 const KEEP_RUNS := 40       # older runs are deleted
 
-const TRAIL_FIELDS := ["t", "x", "z", "yaw", "room", "hp", "res_state", "res_x", "res_z", "keys"]
+## "near" is the closest resident in the same room as the player (empty if none).
+const TRAIL_FIELDS := ["t", "x", "y", "z", "yaw", "room", "hp", "weapon", "near", "near_state", "near_x", "near_z", "keys"]
 
 var folder := ""
 var run_name := ""          # file name without extension, e.g. 2026-10-25_2031_r3_seed2859317759
@@ -31,7 +32,7 @@ var _started_at := ""
 var _meta_at_start := {}
 var _sample_t := 0.0
 var _flush_t := 0.0
-var _last_res_state := ""
+var _last_states := {}   # resident id -> last state seen
 
 
 func _ready() -> void:
@@ -65,7 +66,7 @@ func begin(main: Node) -> void:
 		Time.get_datetime_string_from_system().replace("T", "_").replace(":", "").left(15),
 		int(GameState.meta.reporter), GameState.night_seed]
 	GameState.run_file = run_name
-	_last_res_state = ""
+	_last_states = {}
 	_active = true
 	_prune()
 	flush()
@@ -75,7 +76,7 @@ func begin(main: Node) -> void:
 func resume(main: Node) -> void:
 	_main = main
 	_active = true
-	_last_res_state = ""
+	_last_states = {}
 	placed = {}
 	run_name = GameState.run_file
 	var data = null
@@ -143,36 +144,45 @@ func _sample() -> void:
 	if _main == null or not is_instance_valid(_main) or _main.player == null:
 		return
 	var p: Node3D = _main.player
-	var r: Node3D = _main.get_node_or_null("Resident")
-	var res_state := ""
-	var rx := 0.0
-	var rz := 0.0
-	if r != null:
-		res_state = (r.State.keys()[r.state] as String).to_lower()
-		rx = snappedf(r.global_position.x, 0.01)
-		rz = snappedf(r.global_position.z, 0.01)
-		if res_state != _last_res_state:
-			if _last_res_state != "":
-				GameState.log_event("resident", {"state": res_state,
+	var near: Node3D = null
+	var near_d := INF
+	var room_box: AABB = _main._bounds.get(_main._room, AABB())
+	for r in _main.residents:
+		if not is_instance_valid(r):
+			continue
+		var st: String = r.state_name()
+		var last: String = _last_states.get(r.resident_id, "")
+		if st != last:
+			if last != "":
+				GameState.log_event("resident", {"who": r.resident_id, "state": st, "hp": r.hp,
 					"distance": snappedf(r.global_position.distance_to(p.global_position), 0.01)})
-			_last_res_state = res_state
+			_last_states[r.resident_id] = st
+		var d: float = r.global_position.distance_to(p.global_position)
+		if room_box.has_point(r.global_position + Vector3(0, 0.5, 0)) and d < near_d:
+			near = r
+			near_d = d
 	trail.append([
 		snappedf(GameState.night_time, 0.01),
 		snappedf(p.global_position.x, 0.01),
+		snappedf(p.global_position.y, 0.01),
 		snappedf(p.global_position.z, 0.01),
 		snappedf(rad_to_deg(p.rotation.y), 1.0),
 		_main._room,
 		p.health,
-		res_state, rx, rz,
+		GameState.weapon_label(),
+		near.resident_id if near else "",
+		near.state_name() if near else "",
+		snappedf(near.global_position.x, 0.01) if near else 0.0,
+		snappedf(near.global_position.z, 0.01) if near else 0.0,
 		_held(),
 	])
 
 
-## Which controls are held right now, as a short code: F B L R (move, turn), S (run), E (interact).
+## Which controls are held right now, as a short code: F B L R (move, turn), S (run), E (interact), A (aim).
 func _held() -> String:
 	var s := ""
 	for pair in [["move_forward", "F"], ["move_back", "B"], ["turn_left", "L"], ["turn_right", "R"],
-			["run", "S"], ["interact", "E"]]:
+			["run", "S"], ["interact", "E"], ["aim", "A"]]:
 		if Input.is_action_pressed(pair[0]):
 			s += pair[1]
 	return s
@@ -221,6 +231,8 @@ func flush() -> void:
 		"night_time": snappedf(GameState.night_time, 0.01),
 		"flags": flags,
 		"inventory": GameState.inventory.duplicate(),
+		"equipped": GameState.equipped,
+		"ammo": GameState.ammo,
 		"leads_carried": GameState.leads.duplicate(),
 		"events": GameState.events,
 		"trail": {"every_seconds": SAMPLE_EVERY, "fields": TRAIL_FIELDS, "rows": trail},

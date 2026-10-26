@@ -14,7 +14,12 @@ const QUICK_TURN_TIME := 0.35
 const MAX_HEALTH := 5
 const SHOVE_COOLDOWN := 4.0
 
+const AIM_TURN_SPEED := 1.9
+const SWING_TIME := 0.45
+
 var frozen := false
+var aiming := false     # holding Aim with a weapon ready: feet planted, turning only
+var attack_cd := 0.0
 var health := MAX_HEALTH
 var running := false
 var shove_cd := 0.0
@@ -65,7 +70,12 @@ func _part(mesh: Mesh, pos: Vector3, color: Color, scale_by := Vector3.ONE) -> M
 
 func _physics_process(delta: float) -> void:
 	shove_cd = maxf(0.0, shove_cd - delta)
+	attack_cd = maxf(0.0, attack_cd - delta)
 	running = false
+	var want_aim := Input.is_action_pressed("aim") and GameState.equipped != "" and not frozen and _stagger <= 0.0 and health > 0
+	if want_aim != aiming:
+		aiming = want_aim
+		_body.rotation.x = -0.12 if aiming else 0.0  # brace
 	if is_on_floor():
 		velocity.y = 0.0
 	else:
@@ -80,6 +90,13 @@ func _physics_process(delta: float) -> void:
 		return
 
 	if frozen or _quick_turning:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		move_and_slide()
+		return
+
+	if aiming:
+		rotation.y += Input.get_axis("turn_right", "turn_left") * AIM_TURN_SPEED * delta
 		velocity.x = 0.0
 		velocity.z = 0.0
 		move_and_slide()
@@ -136,6 +153,19 @@ func shove(at: Vector3) -> void:
 	var t := create_tween()
 	t.tween_property(_body, "position:z", -0.25, 0.08)
 	t.tween_property(_body, "position:z", 0.0, 0.2)
+
+
+## The swing or shot animation. Damage is decided by the level, which knows who's in front.
+func attack_motion(gun: bool) -> void:
+	attack_cd = 0.7 if gun else SWING_TIME + 0.15
+	var t := create_tween()
+	if gun:
+		t.tween_property(_body, "position:z", 0.08, 0.04)
+		t.tween_property(_body, "position:z", 0.0, 0.2)
+	else:
+		t.tween_property(_body, "rotation:y", 0.5, 0.12)
+		t.tween_property(_body, "rotation:y", -0.6, 0.1)
+		t.tween_property(_body, "rotation:y", 0.0, 0.2)
 
 
 func heal(amount: int) -> void:

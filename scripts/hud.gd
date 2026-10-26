@@ -6,11 +6,11 @@ signal _picked(index: int)
 
 const KEYS := {
 	"move": "W/S", "turn": "A/D", "run": "Shift", "interact": "E",
-	"inventory": "Tab", "cancel": "Esc", "debug": "F3",
+	"inventory": "Tab", "cancel": "Esc", "debug": "F3", "aim": "Q / Right-click",
 }
 const PAD := {
 	"move": "Stick up/down", "turn": "Stick left/right", "run": "B", "interact": "A",
-	"inventory": "Y", "cancel": "B", "debug": "Back",
+	"inventory": "Y", "cancel": "B", "debug": "Back", "aim": "R1",
 }
 const TEXT := Color(0.92, 0.90, 0.86)
 const GOLD := Color(0.90, 0.76, 0.45)
@@ -25,6 +25,7 @@ var _prompt: Label
 var _condition: Label
 var _version: Label
 var _debug: Label
+var _weapon: Label
 var _hint: Label
 var _menu: ColorRect
 var _menu_title: Label
@@ -68,6 +69,13 @@ func _ready() -> void:
 	_prompt.offset_right = -6
 	_prompt.offset_top = -14
 	_prompt.offset_bottom = -2
+
+	_weapon = _label(9, HORIZONTAL_ALIGNMENT_LEFT, GOLD)
+	_weapon.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+	_weapon.offset_left = 6
+	_weapon.offset_right = 200
+	_weapon.offset_top = -14
+	_weapon.offset_bottom = -2
 
 	_condition = _label(10, HORIZONTAL_ALIGNMENT_LEFT)
 	_condition.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
@@ -152,6 +160,11 @@ func show_message(text: String, seconds := 2.5) -> void:
 		GameState.log_event("message", {"text": keys(text)})
 	_message.text = keys(text)
 	_message_t = seconds
+
+
+## The weapon readout in the bottom-left corner, shown while aiming.
+func set_weapon(text: String) -> void:
+	_weapon.text = text
 
 
 func set_prompt(text: String) -> void:
@@ -244,6 +257,7 @@ func _process(delta: float) -> void:
 	_hint.text = keys(_hint_temp if _hint_temp_t > 0.0 else _hint_persist)
 	_hint.visible = not _choice_active
 	_message.visible = not _choice_active
+	_weapon.visible = not _choice_active
 
 	if Input.is_action_just_pressed("debug_toggle"):
 		_debug_on = not _debug_on
