@@ -224,6 +224,7 @@ func flush() -> void:
 			"controller": _main != null and is_instance_valid(_main) and _main.hud.pad,
 		},
 		"reporter": int(GameState.meta.reporter),
+		"debug": GameState.debug.duplicate(),
 		"seed": GameState.night_seed,
 		"meta_at_start": _meta_at_start,
 		"placed": placed,
@@ -257,7 +258,8 @@ static func clock(seconds: float) -> String:
 func timeline() -> String:
 	var lines := [
 		"P.M. v%s  Reporter #%d  Seed %d" % [GameState.VERSION, int(GameState.meta.reporter), GameState.night_seed],
-		"Started %s  Status: %s" % [_started_at, outcome.get("status", "in_progress")],
+		"Started %s  Status: %s%s" % [_started_at, outcome.get("status", "in_progress"),
+			"  DEBUG: unlimited ammo" if GameState.debug.infinite_ammo else ""],
 		"Placed tonight: " + ", ".join(placed.keys().map(func(k) -> String: return "%s at %s" % [k, placed[k]])),
 		"",
 	]

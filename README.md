@@ -64,6 +64,14 @@ Every night starts **Calm**: residents talk to you, watch you and let you pass. 
 - **Shove** still stuns. Any hit on a stunned resident counts double, so shove-then-axe puts someone down in one blow.
 - **They get back up.** A downed resident rises again after about 40 seconds, weaker. To stop that, burn the body with **Lamp Oil** or finish it with the **Fire Axe**.
 
+## Debug menu (playtesting only)
+
+Press **F4** or the **backtick key (`)** while playing from Godot. On a Mac, F4 may need **fn**. The menu only exists in debug builds.
+
+- **Revolver, unlimited ammo:** hands you the revolver, readied, and it never runs out. It stays on for later reporters until you switch it off or quit the game.
+
+The stats overlay shows "DEBUG" while a switch is on, and every run report records it.
+
 ## Run reports (for troubleshooting)
 
 Every night is recorded to `~/PMRuns` on your computer, like a QA session attached to a bug ticket:
@@ -93,4 +101,5 @@ Headless tests live in `tests/` and can be rerun anytime:
 godot --headless --path . -s tests/test_compound_and_combat.gd
 godot --headless --path . -s tests/test_recorder.gd
 godot --headless --path . -s tests/test_buildup.gd
+godot --headless --path . -s tests/test_debug.gd
 ```

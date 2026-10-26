@@ -7,7 +7,7 @@ extends Node
 ## - The META: what survives. Evidence sent home, facts locked in by that evidence, and the
 ##   compound's memory (doors that stay open). Lives in META_PATH.
 
-const VERSION := "0.5.2"
+const VERSION := "0.5.3"
 const SAVE_PATH := "user://save.json"   # a paused night
 const META_PATH := "user://meta.json"   # everything that carries over
 const MAX_SLOTS := 6
@@ -114,6 +114,10 @@ var inventory: Array[String] = []
 var equipped := ""      # the weapon in hand, or ""
 var wear := {}          # uses left per melee weapon: {"pipe": 4}
 var ammo := 0           # revolver rounds carried
+
+## Debug switches (F4, debug builds only). Kept for the session, not saved; every run report
+## records which were on, so a debug night is never mistaken for a real one.
+var debug := {"infinite_ammo": false}
 var flags := {}
 var health := MAX_HEALTH
 var spawn := {}       # {"pos": [x, y, z], "yaw": float} when resuming a paused night
@@ -273,6 +277,10 @@ func count_events(type: String) -> int:
 
 # ---------------------------------------------------------------- items and leads
 
+func can_fire() -> bool:
+	return debug.infinite_ammo or ammo > 0
+
+
 func has_item(id: String) -> bool:
 	return inventory.has(id)
 
@@ -304,6 +312,8 @@ func weapon_label() -> String:
 	if equipped == "":
 		return ""
 	if ITEMS[equipped].kind == "gun":
+		if debug.infinite_ammo:
+			return "%s: unlimited (debug)" % item_name(equipped)
 		return "%s: %d %s" % [item_name(equipped), ammo, "round" if ammo == 1 else "rounds"]
 	return "%s (%d)" % [item_name(equipped), int(wear.get(equipped, 0))]
 

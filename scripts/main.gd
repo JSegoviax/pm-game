@@ -144,6 +144,8 @@ func _start(mode: String) -> void:
 		Recorder.begin(self)
 	_spawn_pickups()
 	_spawn_residents()
+	if GameState.debug.infinite_ammo:
+		_debug_give_gun()
 	Recorder.flush()
 	_update_camera(true)
 	_music_dread.play()
@@ -1054,6 +1056,9 @@ func _physics_process(delta: float) -> void:
 		hud.set_prompt("")
 		hud.set_weapon("")
 		return
+	if Input.is_action_just_pressed("debug_menu") and OS.is_debug_build() and _ui_cd <= 0.0 and not player.aiming:
+		_debug_menu()
+		return
 	if Input.is_action_just_pressed("inventory") and _ui_cd <= 0.0 and player.can_act() and not player.aiming:
 		hud.set_prompt("")
 		GameState.log_event("inventory", {})
@@ -1320,7 +1325,7 @@ func _attack_prompt() -> String:
 	if w == "":
 		return ""
 	if GameState.ITEMS[w].kind == "gun":
-		return "[{interact}] Fire" if GameState.ammo > 0 else "No rounds"
+		return "[{interact}] Fire" if GameState.can_fire() else "No rounds"
 	return "[{interact}] Swing"
 
 
@@ -1328,12 +1333,13 @@ func _attack() -> void:
 	var w := GameState.equipped
 	var item: Dictionary = GameState.ITEMS[w]
 	if item.kind == "gun":
-		if GameState.ammo <= 0:
+		if not GameState.can_fire():
 			hud.show_message("Click. Empty.", 1.5)
 			GameState.log_event("dry_fire", {})
 			player.attack_cd = 0.5
 			return
-		GameState.ammo -= 1
+		if not GameState.debug.infinite_ammo:
+			GameState.ammo -= 1
 		player.attack_motion(true)
 		_gunshot()
 		for r in residents:
@@ -1346,7 +1352,7 @@ func _attack() -> void:
 			_hit_flash(t)
 			if not down:
 				hud.show_message("He jerks back. He keeps coming.", 1.5)
-		if GameState.ammo == 0:
+		if GameState.ammo == 0 and not GameState.debug.infinite_ammo:
 			hud.flash_hint("That was the last round.", 3.0)
 		return
 
@@ -1361,6 +1367,34 @@ func _attack() -> void:
 	if stunned and w == "fire_axe" and t.is_down():
 		hud.show_message("While he reels, you bring the axe down.", 2.0)
 	_wear(w)
+
+
+## Debug switches for playtesting (F4, debug builds only).
+func _debug_menu() -> void:
+	_busy = true
+	get_tree().paused = true
+	while true:
+		var on: bool = GameState.debug.infinite_ammo
+		var opts := ["Revolver, unlimited ammo: " + ("ON" if on else "OFF"), "Close"]
+		var i: int = await hud.choose("Debug", opts, true,
+			"For playtesting. Every run report records which switches were on.")
+		if i == 0:
+			GameState.debug.infinite_ammo = not on
+			GameState.log_event("debug", {"infinite_ammo": GameState.debug.infinite_ammo})
+			if GameState.debug.infinite_ammo:
+				_debug_give_gun()
+		else:
+			break
+	get_tree().paused = false
+	_busy = false
+	_ui_cd = 0.3
+
+
+## Hands the reporter the revolver (even with full pockets) and readies it.
+func _debug_give_gun() -> void:
+	if not GameState.has_item("revolver"):
+		GameState.inventory.append("revolver")
+	GameState.equipped = "revolver"
 
 
 ## One use off a melee weapon. When it's worn out, it breaks.

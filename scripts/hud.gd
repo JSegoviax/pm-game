@@ -6,7 +6,7 @@ signal _picked(index: int)
 
 const KEYS := {
 	"move": "W/S", "turn": "A/D", "run": "Shift", "interact": "E",
-	"inventory": "Tab", "cancel": "Esc", "debug": "F3", "aim": "Q / Right-click",
+	"inventory": "Tab", "cancel": "Esc", "debug": "F3", "debug_menu": "F4 or `", "aim": "Q / Right-click",
 }
 const PAD := {
 	"move": "Stick up/down", "turn": "Stick left/right", "run": "B", "interact": "A",
@@ -283,6 +283,8 @@ func _update_debug() -> void:
 	# Which night this is, so a strange or broken night can be reported and replayed.
 	if GameState.night_seed != 0:
 		text += "\nReporter #%d\nSeed %d" % [int(GameState.meta.reporter), GameState.night_seed]
+	if GameState.debug.infinite_ammo:
+		text += "\nDEBUG: unlimited ammo"
 	_debug.text = text
 
 
