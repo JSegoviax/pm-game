@@ -39,6 +39,7 @@ var interactables: Array = []  # { pos: Callable, range, prompt: Callable, actio
 var _flicker_lights: Array = []
 var _bounds := {}               # room name -> AABB, so residents stay in their room
 var residents: Array = []
+var _locked_lamps: Array = []  # {flag, bulb, light}: red until the lock is open for good
 var _room := ""
 var _current_zone := -1
 var _started := false
@@ -81,6 +82,7 @@ func _ready() -> void:
 	add_child(player)
 	player.global_position = START_POS
 	player.frozen = true
+	_blob(player, 0.45)
 	player.hurt.connect(_on_player_hurt)
 	player.healed.connect(func(h: int) -> void:
 		GameState.log_event("healed", {"health": h})
@@ -188,11 +190,11 @@ func _build_environment() -> void:
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color(0.01, 0.01, 0.015)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.32, 0.34, 0.42)
-	env.ambient_light_energy = 0.35
+	env.ambient_light_color = Color(0.40, 0.40, 0.46)
+	env.ambient_light_energy = 0.6
 	env.fog_enabled = true
 	env.fog_light_color = Color(0.05, 0.05, 0.07)
-	env.fog_density = 0.06
+	env.fog_density = 0.03
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
@@ -241,7 +243,17 @@ func _room_shell(name_: String, center: Vector3, size_x: float, size_z: float, f
 	room.name = name_
 	room.position = center
 	add_child(room)
-	_box(room, Vector3(size_x, 0.2, size_z), Vector3(0, -0.1, 0), floor_mat)
+	# Floors get tiles: the lines show how far away things are and which way is level.
+	var tiled := _tiles((floor_mat as StandardMaterial3D).albedo_color)
+	_box(room, Vector3(size_x, 0.2, size_z), Vector3(0, -0.1, 0), tiled)
+	# A dark baseboard marks where every wall meets the floor.
+	var base := _mat((wall_mat as StandardMaterial3D).albedo_color * 0.35)
+	var bx := size_x / 2.0 - 0.02
+	var bz := size_z / 2.0 - 0.02
+	_box(room, Vector3(size_x, 0.22, 0.05), Vector3(0, 0.11, -bz), base, false)
+	_box(room, Vector3(size_x, 0.22, 0.05), Vector3(0, 0.11, bz), base, false)
+	_box(room, Vector3(0.05, 0.22, size_z), Vector3(-bx, 0.11, 0), base, false)
+	_box(room, Vector3(0.05, 0.22, size_z), Vector3(bx, 0.11, 0), base, false)
 	_box(room, Vector3(size_x, 0.2, size_z), Vector3(0, WALL_H + 0.1, 0), wall_mat, false)
 	var hx := size_x / 2.0
 	var hz := size_z / 2.0
@@ -250,6 +262,125 @@ func _room_shell(name_: String, center: Vector3, size_x: float, size_z: float, f
 	_box(room, Vector3(WALL_T, WALL_H, size_z), Vector3(-hx - WALL_T / 2, WALL_H / 2, 0), wall_mat)
 	_box(room, Vector3(WALL_T, WALL_H, size_z), Vector3(hx + WALL_T / 2, WALL_H / 2, 0), wall_mat)
 	return room
+
+
+## A floor material with tiles 1 m across: grout lines a little darker, a little variation per tile.
+func _tiles(color: Color) -> StandardMaterial3D:
+	var px := 16
+	var img := Image.create(px * 4, px * 4, false, Image.FORMAT_RGB8)
+	var r := RandomNumberGenerator.new()
+	r.seed = int(color.r * 1000 + color.g * 100 + color.b * 10)
+	for ty in 4:
+		for tx in 4:
+			var shade := 0.88 + r.randf() * 0.2
+			for y in px:
+				for x in px:
+					var c := color * shade
+					if x == 0 or y == 0:
+						c = color * 0.55
+					c = c * (0.95 + r.randf() * 0.1)
+					img.set_pixel(tx * px + x, ty * px + y, Color(c.r, c.g, c.b))
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = ImageTexture.create_from_image(img)
+	m.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	m.uv1_triplanar = true
+	m.uv1_scale = Vector3(0.25, 0.25, 0.25)  # 4 tiles per texture -> 1 m tiles
+	m.roughness = 1.0
+	return m
+
+
+## A soft dark disc on the floor. Under people and things, it shows where they touch the ground.
+var _shadow_mat: StandardMaterial3D
+
+func _blob(parent: Node3D, radius: float) -> MeshInstance3D:
+	if _shadow_mat == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(0, 0, 0, 0.7))
+		g.set_color(1, Color(0, 0, 0, 0))
+		var t := GradientTexture2D.new()
+		t.gradient = g
+		t.fill = GradientTexture2D.FILL_RADIAL
+		t.fill_from = Vector2(0.5, 0.5)
+		t.fill_to = Vector2(1.0, 0.5)
+		t.width = 32
+		t.height = 32
+		_shadow_mat = StandardMaterial3D.new()
+		_shadow_mat.albedo_texture = t
+		_shadow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_shadow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_shadow_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var mi := MeshInstance3D.new()
+	var q := PlaneMesh.new()
+	q.size = Vector2(radius * 2, radius * 2)
+	mi.mesh = q
+	mi.material_override = _shadow_mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position.y = 0.02
+	mi.top_level = false
+	parent.add_child(mi)
+	return mi
+
+
+## Furniture that reads as what it is.
+func _table(parent: Node3D, pos: Vector3, size: Vector3, mat: Material) -> void:
+	_box(parent, Vector3(size.x, 0.08, size.z), pos + Vector3(0, size.y - 0.04, 0), mat)
+	for sx in [-1, 1]:
+		for sz in [-1, 1]:
+			_box(parent, Vector3(0.08, size.y - 0.08, 0.08), pos + Vector3(sx * (size.x / 2 - 0.08), (size.y - 0.08) / 2, sz * (size.z / 2 - 0.08)), mat, false)
+	# Collide as one block so you can't walk under it
+	var body := StaticBody3D.new()
+	body.position = pos + Vector3(0, size.y / 2, 0)
+	parent.add_child(body)
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = size
+	cs.shape = shape
+	body.add_child(cs)
+
+
+func _chair(parent: Node3D, pos: Vector3, yaw: float, mat: Material, tipped := false) -> void:
+	var c := Node3D.new()
+	c.position = pos
+	c.rotation.y = yaw
+	if tipped:
+		c.rotation.z = 1.45
+		c.position.y += 0.25
+	parent.add_child(c)
+	_box(c, Vector3(0.45, 0.06, 0.45), Vector3(0, 0.45, 0), mat, false)
+	_box(c, Vector3(0.45, 0.5, 0.06), Vector3(0, 0.72, 0.2), mat, false)
+	for sx in [-0.18, 0.18]:
+		for sz in [-0.18, 0.18]:
+			_box(c, Vector3(0.05, 0.45, 0.05), Vector3(sx, 0.22, sz), mat, false)
+	var body := StaticBody3D.new()
+	c.add_child(body)
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(0.45, 0.9, 0.45)
+	cs.shape = shape
+	cs.position.y = 0.45
+	body.add_child(cs)
+
+
+## A bed (or bunk, with `bunk`): frame, legs, mattress and pillow. Long side along z.
+func _bed(parent: Node3D, pos: Vector3, frame: Material, sheet: Material, bunk := false) -> void:
+	var pillow := _mat(Color(0.85, 0.84, 0.80))
+	var levels := [0.45, 1.55] if bunk else [0.45]
+	for y in levels:
+		_box(parent, Vector3(0.95, 0.08, 2.0), pos + Vector3(0, y - 0.1, 0), frame, false)
+		_box(parent, Vector3(0.88, 0.14, 1.9), pos + Vector3(0, y + 0.01, 0), sheet, false)
+		_box(parent, Vector3(0.6, 0.1, 0.32), pos + Vector3(0, y + 0.12, -0.75), pillow, false)
+	var top: float = levels[-1] + 0.35
+	for sx in [-0.44, 0.44]:
+		for sz in [-0.96, 0.96]:
+			_box(parent, Vector3(0.06, top, 0.06), pos + Vector3(sx, top / 2, sz), frame, false)
+	var body := StaticBody3D.new()
+	body.position = pos + Vector3(0, 0.3, 0)
+	parent.add_child(body)
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(0.95, 0.6, 2.0)
+	cs.shape = shape
+	body.add_child(cs)
 
 
 func _light(room: Node3D, pos: Vector3, color: Color, energy: float, range_: float, flicker := false) -> void:
@@ -288,11 +419,41 @@ func _add_interactable(pos: Callable, range_: float, prompt: Callable, action: C
 func _door(room: Node3D, local_pos: Vector3, to: Vector3, yaw: float, to_room: String, lock := {}) -> void:
 	var p := room.global_position + local_pos
 	var side_wall := absf(local_pos.x) > absf(local_pos.z)
-	var slab := _box(self, Vector3(1.3, 2.4, 0.12), p + Vector3(0, 1.2, 0), _mat(Color(0.22, 0.12, 0.08)), false)
-	if side_wall:
-		slab.rotation.y = PI / 2
-	var knob_off := Vector3(0, 1.1, 0.45) if side_wall else Vector3(0.45, 1.1, 0)
-	_box(self, Vector3(0.08, 0.08, 0.08), p + knob_off, _mat(Color(0.75, 0.62, 0.30)), false)
+	# Which way the door faces into the room
+	var inward := Vector3(-signf(local_pos.x), 0, 0) if side_wall else Vector3(0, 0, -signf(local_pos.z))
+	var door := Node3D.new()
+	add_child(door)
+	door.global_position = p
+	door.rotation.y = PI / 2 if side_wall else 0.0
+	var local_in := door.global_transform.basis.inverse() * inward
+	var wood := _mat(Color(0.42, 0.24, 0.13))
+	var trim := _mat(Color(0.62, 0.52, 0.38))
+	var dark := _mat(Color(0.25, 0.14, 0.08))
+	# Frame
+	_box(door, Vector3(0.14, 2.6, 0.2), Vector3(-0.72, 1.3, 0), trim, false)
+	_box(door, Vector3(0.14, 2.6, 0.2), Vector3(0.72, 1.3, 0), trim, false)
+	_box(door, Vector3(1.58, 0.16, 0.2), Vector3(0, 2.62, 0), trim, false)
+	# Door with two raised panels
+	_box(door, Vector3(1.3, 2.5, 0.08), Vector3(0, 1.25, 0), wood, false)
+	for y in [0.75, 1.75]:
+		_box(door, Vector3(0.9, 0.7, 0.1), Vector3(0, y, 0), dark, false)
+	# Handle on the room side
+	_box(door, Vector3(0.1, 0.06, 0.1), Vector3(0.45, 1.05, 0) + local_in * 0.08, _mat(Color(0.85, 0.70, 0.32)), false)
+	# A small lamp above every door, so exits can always be found
+	var lamp_pos := Vector3(0, 2.95, 0) + local_in * 0.15
+	var bulb := _mat(Color(1.0, 0.85, 0.6))
+	bulb.emission_enabled = true
+	bulb.emission = Color(1.0, 0.75, 0.45)
+	_box(door, Vector3(0.22, 0.12, 0.12), lamp_pos, bulb, false)
+	var l := OmniLight3D.new()
+	l.position = lamp_pos + local_in * 0.3 - Vector3(0, 0.2, 0)
+	l.light_color = Color(1.0, 0.8, 0.55)
+	l.light_energy = 0.9
+	l.omni_range = 3.2
+	door.add_child(l)
+	# Locked doors get a red lamp until they're open for good
+	if lock.has("flag"):
+		_locked_lamps.append({"flag": str(lock.flag), "bulb": bulb, "light": l})
 
 	var d := {"pos": p, "to": to, "yaw": yaw, "room": to_room}
 	d.merge(lock)
@@ -342,6 +503,10 @@ func _pickup(id: String, pos: Vector3) -> void:
 	glint.omni_range = 0.8
 	glint.position.y = 0.15
 	node.add_child(glint)
+	if pos.y > 0.2:
+		pass  # on furniture: the furniture's own shape is enough
+	else:
+		_blob(node, 0.3).position.y = -0.03
 	_flicker_lights.append({"light": glint, "base": 0.4, "t": randf() * 10.0})
 
 	var entry := _add_interactable(
@@ -363,10 +528,10 @@ func _build_foyer() -> void:
 	for x in [-3.0, 3.0]:
 		_box(foyer, Vector3(0.6, WALL_H, 0.6), Vector3(x, WALL_H / 2, -1.0), stone)
 	# Meeting table with chairs pushed back in a hurry
-	_box(foyer, Vector3(3.2, 0.9, 1.1), Vector3(0, 0.45, -2.6), wood)
-	_box(foyer, Vector3(0.5, 0.9, 0.5), Vector3(-1.2, 0.45, -1.6), wood).rotation.y = 0.5
-	_box(foyer, Vector3(0.5, 0.9, 0.5), Vector3(1.4, 0.45, -3.7), wood).rotation.y = -0.3
-	_box(foyer, Vector3(0.5, 0.45, 0.5), Vector3(2.2, 0.22, -1.2), wood).rotation.z = 1.4
+	_table(foyer, Vector3(0, 0, -2.6), Vector3(3.2, 0.9, 1.1), wood)
+	_chair(foyer, Vector3(-1.2, 0, -1.6), PI + 0.5, wood)
+	_chair(foyer, Vector3(1.4, 0, -3.7), -0.3, wood)
+	_chair(foyer, Vector3(2.2, 0, -1.2), PI, wood, true)
 	# Reception desk by the entrance
 	_box(foyer, Vector3(2.0, 1.0, 0.7), Vector3(-4.2, 0.5, 3.0), wood)
 	# The sigil on the north wall
@@ -428,12 +593,13 @@ func _build_records_room() -> void:
 	var room := _room_shell("RecordsRoom", RECORDS, 6.0, 6.0, _mat(Color(0.30, 0.20, 0.13), true), _mat(Color(0.30, 0.34, 0.28), true))
 	var wood := _mat(Color(0.32, 0.20, 0.12))
 	# Desk and typewriter
-	_box(room, Vector3(1.6, 0.8, 0.8), Vector3(-1.6, 0.4, -2.2), wood)
+	_table(room, Vector3(-1.6, 0, -2.2), Vector3(1.6, 0.8, 0.8), wood)
+	_chair(room, Vector3(-1.6, 0, -1.4), 0.2, wood)
 	_box(room, Vector3(0.5, 0.18, 0.4), Vector3(-1.6, 0.89, -2.2), _mat(Color(0.10, 0.10, 0.11)), false)
 	_box(room, Vector3(0.28, 0.02, 0.2), Vector3(-1.6, 1.06, -2.32), _mat(Color(0.92, 0.9, 0.84)), false).rotation.x = -0.9
 	# Filing shelves and a cot
 	_box(room, Vector3(0.5, 2.2, 2.2), Vector3(2.7, 1.1, -1.5), wood)
-	_box(room, Vector3(1.0, 0.4, 2.0), Vector3(2.4, 0.2, 1.8), _mat(Color(0.35, 0.35, 0.40)))
+	_bed(room, Vector3(2.4, 0, 1.6), _mat(Color(0.30, 0.30, 0.32)), _mat(Color(0.45, 0.42, 0.36)))
 
 	_light(room, Vector3(-1.4, 2.0, -1.6), Color(1.0, 0.76, 0.45), 1.7, 7.0)
 	_light(room, Vector3(1.5, 3.2, 1.5), Color(1.0, 0.85, 0.65), 0.6, 6.0)
@@ -474,7 +640,7 @@ func _build_welcome_hall() -> void:
 	# Leather armchairs around a low table
 	for c in [Vector3(-3.0, 0, 0.6), Vector3(-3.0, 0, -1.6), Vector3(-1.9, 0, -0.5)]:
 		_box(room, Vector3(0.9, 0.9, 0.9), c + Vector3(0, 0.45, 0), leather)
-	_box(room, Vector3(0.9, 0.4, 1.4), Vector3(-3.0, 0.2, -0.5), wood)
+	_table(room, Vector3(-3.0, 0, -0.5), Vector3(0.9, 0.4, 1.4), wood)
 	# The donor wall: plaques by tier
 	for row in 3:
 		for i in 5 - row:
@@ -554,11 +720,10 @@ func _build_infirmary() -> void:
 	var sheet := _mat(Color(0.82, 0.84, 0.82))
 	# Beds along the north wall
 	for x in [-2.6, -0.4, 1.8]:
-		_box(room, Vector3(1.0, 0.5, 2.0), Vector3(x, 0.25, -2.8), steel)
-		_box(room, Vector3(0.95, 0.12, 1.9), Vector3(x, 0.56, -2.8), sheet, false)
+		_bed(room, Vector3(x, 0, -2.8), steel, sheet)
 		_box(room, Vector3(0.05, 1.8, 0.05), Vector3(x + 0.7, 0.9, -2.0), steel, false)  # drip stand
 	# The bottling table: rows of green tonic
-	_box(room, Vector3(2.6, 0.9, 1.0), Vector3(0, 0.45, 0.6), steel)
+	_table(room, Vector3(0, 0, 0.6), Vector3(2.6, 0.9, 1.0), steel)
 	var tonic := _mat(Color(0.25, 0.75, 0.35))
 	tonic.emission_enabled = true
 	tonic.emission = Color(0.08, 0.35, 0.12)
@@ -587,9 +752,7 @@ func _build_dormitory() -> void:
 	var blanket := _mat(Color(0.36, 0.34, 0.28))
 	for x in [-4.0, -1.8, 0.4, 2.6]:
 		for z in [-2.6, 0.6]:
-			_box(room, Vector3(0.9, 0.45, 2.0), Vector3(x, 0.22, z), frame)
-			_box(room, Vector3(0.85, 0.1, 1.9), Vector3(x, 0.5, z), blanket, false)
-			_box(room, Vector3(0.9, 0.06, 2.0), Vector3(x, 1.5, z), frame, false)  # upper bunk
+			_bed(room, Vector3(x, 0, z), frame, blanket, true)
 	# Lockers along the south wall
 	for i in 6:
 		_box(room, Vector3(0.6, 1.9, 0.5), Vector3(-5.0 + i * 0.65, 0.95, 3.7), _mat(Color(0.28, 0.33, 0.30)))
@@ -783,6 +946,7 @@ func _spawn_resident(c: Dictionary, pos: Vector3, yaw: float) -> void:
 	r.lines = PackedStringArray(TALK[c.kind].notice)
 	r.talk_lines = PackedStringArray(TALK[c.kind].talk)
 	add_child(r)
+	_blob(r, 0.5)
 	r.add_to_group("residents")
 	residents.append(r)
 	r.global_position = pos
@@ -870,6 +1034,12 @@ func _physics_process(delta: float) -> void:
 		var l: OmniLight3D = f.light
 		var dip := 0.15 if fmod(f.t, 3.7) < 0.12 or fmod(f.t, 5.3) < 0.06 else 1.0
 		l.light_energy = f.base * dip * (0.92 + 0.08 * sin(f.t * 23.0))
+	for lamp in _locked_lamps:
+		var open := GameState.world(lamp.flag)
+		var c := Color(1.0, 0.8, 0.55) if open else Color(1.0, 0.25, 0.18)
+		(lamp.light as OmniLight3D).light_color = c
+		(lamp.bulb as StandardMaterial3D).emission = c * 0.8
+		(lamp.bulb as StandardMaterial3D).albedo_color = c
 	if not _started:
 		return
 
@@ -1016,7 +1186,7 @@ func _take(slot: String, node: Node3D, entry: Dictionary) -> void:
 
 func _resident_prompt(r: Node3D) -> String:
 	var d := r.global_position.distance_to(player.global_position)
-	if r.is_dead() or r.state == r.State.ASLEEP:
+	if r.is_dead() or r.state in [r.State.ASLEEP, r.State.STIRRING, r.State.RISING]:
 		return ""
 	if r.is_down():
 		if d > 1.7:

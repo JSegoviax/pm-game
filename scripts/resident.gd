@@ -9,7 +9,7 @@ signal turned_hostile
 signal went_down
 signal rose
 
-enum State { IDLE, TALKING, STALKING, WINDUP, LUNGE, RECOVER, STUNNED, ASLEEP, DOWN, RISING, DEAD }
+enum State { IDLE, TALKING, STALKING, WINDUP, LUNGE, RECOVER, STUNNED, ASLEEP, STIRRING, DOWN, RISING, DEAD }
 
 ## What kind of resident this is. "member": talks, then follows you. "sleeper": asleep in the
 ## dormitory until you get close or make noise. "benefactor": one of the wealthy members, kept
@@ -22,8 +22,10 @@ const RISE_HP := 4          # they come back weaker, but they come back
 const DOWN_TIME := 40.0     # seconds on the floor before getting back up
 const RISE_WARNING := 8.0   # twitching starts this long before rising
 const RISE_TIME := 1.6
-const WAKE_WALK := 1.3      # sleepers wake if you walk this close
+const WAKE_WALK := 1.3      # sleepers stir if you walk this close
 const WAKE_RUN := 2.6       # or run this close
+const STIR_TIME := 1.5      # back away while he stirs and he settles again
+const WAKE_RISE := 2.2      # a woken sleeper takes this long to get up
 
 const NOTICE_RANGE := 2.4   # walks up on you without talking first
 const TALK_RANGE := 3.2     # how far away you can start a conversation
@@ -58,6 +60,7 @@ var hp := MAX_HP
 var finished_by := ""   # "burned" or "axe" once the body is finished
 var down_time := DOWN_TIME
 var _warned := false
+var _rise_from := RISE_TIME
 var _timer := 0.0
 var _hit_this_lunge := false
 var _knock := Vector3.ZERO
@@ -164,7 +167,10 @@ func damage(amount: int, from: Vector3) -> bool:
 	if hp <= 0:
 		_go_down()
 		return true
-	# Any hit wakes a sleeper or ends the small talk
+	# Any hit wakes a sleeper (he still has to get up) or ends the small talk
+	if state in [State.ASLEEP, State.STIRRING]:
+		_wake()
+		return false
 	if not is_hostile():
 		state = State.STALKING
 		turned_hostile.emit()
@@ -174,7 +180,7 @@ func damage(amount: int, from: Vector3) -> bool:
 
 ## A gunshot nearby. Sleepers in the same room wake up.
 func hear(from: Vector3) -> void:
-	if state == State.ASLEEP and bounds.has_point(from + Vector3(0, 0.5, 0)):
+	if state in [State.ASLEEP, State.STIRRING] and bounds.has_point(from + Vector3(0, 0.5, 0)):
 		_wake()
 
 
@@ -213,7 +219,8 @@ func start_asleep() -> void:
 
 func _wake() -> void:
 	state = State.RISING
-	_timer = RISE_TIME * 0.6
+	_timer = WAKE_RISE
+	_rise_from = WAKE_RISE
 	turned_hostile.emit()
 
 
@@ -273,6 +280,17 @@ func _physics_process(delta: float) -> void:
 		State.ASLEEP:
 			var running: bool = target.get("running") == true
 			if target_here and dist < (WAKE_RUN if running else WAKE_WALK):
+				state = State.STIRRING
+				_timer = STIR_TIME
+				spoke.emit("In the bunk beside you, someone stirs.", 2.0)
+		State.STIRRING:
+			_body.rotation.z = sin(_timer * 18.0) * 0.08  # turning over
+			var running: bool = target.get("running") == true
+			var too_close := target_here and dist < (WAKE_RUN if running else WAKE_WALK) + 0.4
+			if not too_close:
+				state = State.ASLEEP  # you backed off; he settles
+				_body.rotation.z = 0.0
+			elif _timer <= 0.0:
 				_wake()
 		State.DOWN:
 			if _timer <= RISE_WARNING and not _warned:
@@ -284,8 +302,9 @@ func _physics_process(delta: float) -> void:
 			if _timer <= 0.0:
 				state = State.RISING
 				_timer = RISE_TIME
+				_rise_from = RISE_TIME
 		State.RISING:
-			var k := clampf(_timer / RISE_TIME, 0.0, 1.0)
+			var k := clampf(_timer / _rise_from, 0.0, 1.0)
 			_body.rotation = Vector3(-PI / 2 * k, 0, 0)
 			_body.position = Vector3(0, 0.32 * k, 0)
 			if _timer <= 0.0:
@@ -342,7 +361,7 @@ func _physics_process(delta: float) -> void:
 
 	if state == State.STALKING:
 		_body.rotation.z = sin(_bob) * 0.06  # an uneven, wrong walk
-	elif state not in [State.DOWN, State.DEAD, State.ASLEEP]:
+	elif state not in [State.DOWN, State.DEAD, State.ASLEEP, State.STIRRING, State.RISING]:
 		_body.rotation.z = 0.0
 	move_and_slide()
 

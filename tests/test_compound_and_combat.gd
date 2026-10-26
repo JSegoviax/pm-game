@@ -165,6 +165,43 @@ func _initialize() -> void:
 	check(gs.ammo == 2, "firing uses a round")
 	check(sl.state_name() != "asleep", "the shot woke the sleeper (%s)" % sl.state_name())
 
+	# 8b. Sleepers stir first; backing off lets them settle
+	var sb = main.get_node_or_null("Resident_sleeper_b")
+	var s2 = sb if sb != null else null
+	if s2 == null:
+		s2 = sl
+		s2.start_asleep()
+	s2.start_asleep()
+	main.player.global_position = s2.global_position + Vector3(0, 0, 1.0)
+	await frames(5)
+	check(s2.state_name() == "stirring", "walking close makes a sleeper stir (%s)" % s2.state_name())
+	main.player.global_position = s2.global_position + Vector3(0, 0, 3.0)
+	await frames(5)
+	check(s2.state_name() == "asleep", "backing off lets him settle (%s)" % s2.state_name())
+	main.player.global_position = s2.global_position + Vector3(0, 0, 1.0)
+	await frames(60)
+	check(s2.state_name() == "stirring", "still stirring after 1 s")
+	await frames(40)
+	check(s2.state_name() == "rising", "wakes after the stir (%s)" % s2.state_name())
+	await frames(100)
+	check(s2.state_name() == "rising", "and takes a while to get up")
+
+	# 8c. A pipe reaches a resident winding up at 1.85 m
+	var rr = main.get_node("Resident_hall")
+	var victim = null
+	for x in main.residents:
+		if x.is_target() and x.kind != "sleeper" and x != rr: victim = x
+	if victim == null:
+		victim = s2
+	victim.state = victim.State.WINDUP
+	victim.set_physics_process(false)
+	gs.add_item("pipe"); gs.equipped = "pipe"
+	main.player.global_position = victim.global_position + Vector3(0, 0, 1.85)
+	main.player.face(0.0)
+	await frames(3)
+	check(main._aim_target(2.0, 0.5) == victim, "pipe reaches 1.85 m")
+	victim.set_physics_process(true)
+
 	# 9. Pause and resume keeps the burned body and the gun
 	gs.save_game(main.player.global_position, 0.0, main.player.health)
 	main.queue_free(); await frames(3)

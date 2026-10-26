@@ -7,7 +7,7 @@ extends Node
 ## - The META: what survives. Evidence sent home, facts locked in by that evidence, and the
 ##   compound's memory (doors that stay open). Lives in META_PATH.
 
-const VERSION := "0.5.0"
+const VERSION := "0.5.1"
 const SAVE_PATH := "user://save.json"   # a paused night
 const META_PATH := "user://meta.json"   # everything that carries over
 const MAX_SLOTS := 6
@@ -36,7 +36,7 @@ const ITEMS := {
 		"kind": "melee",
 		"damage": 2,
 		"uses": 6,
-		"reach": 1.7,
+		"reach": 2.0,
 	},
 	"fire_axe": {
 		"name": "Fire Axe",
@@ -44,7 +44,7 @@ const ITEMS := {
 		"kind": "melee",
 		"damage": 3,
 		"uses": 4,
-		"reach": 1.9,
+		"reach": 2.2,
 	},
 	"revolver": {
 		"name": "Revolver",

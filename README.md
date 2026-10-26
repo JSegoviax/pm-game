@@ -40,16 +40,18 @@ The version number and performance stats (FPS, CPU and GPU frame time, draw call
 - **Welcome Hall** (the benefactors' entrance: donor wall, the founder's portrait) → Chapel
 - **Chapel** (pews, the front rows roped off for benefactors, the altar and speakers) → Infirmary (locked)
 - **Infirmary / tonic lab** → Dormitory (locked; one Infirmary Key opens both doors)
-- **Dormitory** (residents asleep in their bunks) → East Hallway
+- **Dormitory** (residents asleep in their bunks; walk too close and one stirs, back away and he settles) → East Hallway
 - **East Hallway** → Records Room (locked)
 - **Records Room** (safe room, typewriter) → Basement Stairs, down to a chained gate
 
 Items and evidence land on marked spots that change every night. Keys always land where they can be reached.
 
+Every door has a lamp above it. A red lamp means the door is locked.
+
 ## Fighting
 
 - **Ready a weapon** from the inventory (picking one up readies it if your hands are empty). Hold **Aim** (Q, right-click, or R1) to raise it: your feet stay planted and you can still turn. Press **interact** to swing or fire.
-- **Lead Pipe** (2 damage, 6 uses) is always somewhere you can reach. **Fire Axe** (3 damage, 4 uses) turns up on about half the nights. Weapons wear out and break.
+- **Lead Pipe** (2 damage, 6 uses, 2 m reach) is always somewhere you can reach. **Fire Axe** (3 damage, 4 uses, 2.2 m reach) turns up on about half the nights. Weapons wear out and break.
 - **Revolver** (3 damage) turns up on about a third of nights, with a few rounds. It's loud: sleepers in the same room wake up.
 - **Shove** still stuns. Any hit on a stunned resident counts double, so shove-then-axe puts someone down in one blow.
 - **They get back up.** A downed resident rises again after about 40 seconds, weaker. To stop that, burn the body with **Lamp Oil** or finish it with the **Fire Axe**.
