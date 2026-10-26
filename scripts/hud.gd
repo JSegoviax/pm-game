@@ -197,8 +197,13 @@ func choose(title: String, options: Array, allow_cancel := true, subtitle := "",
 	_arm = 2
 	_menu.color = Color(0, 0, 0, 1.0 if big else 0.75)
 	_menu_title.add_theme_font_size_override("font_size", 40 if big else 11)
-	_menu_title.offset_top = 40 if big else 70
-	_menu_opts.offset_top = 156 if big else 140
+	# Long bodies (evidence, dispatches, the post-mortem) move everything up to make room.
+	var long := not big and subtitle.length() > 70
+	_menu_title.offset_top = 40 if big else (24 if long else 70)
+	_menu_sub.offset_top = 48 if long else 112
+	_menu_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT if subtitle.count("\n") > 2 else HORIZONTAL_ALIGNMENT_CENTER
+	_menu_sub.add_theme_color_override("font_color", TEXT if long else DIM)
+	_menu_opts.offset_top = 156 if big else (182 if long else 140)
 	_menu_title.text = title
 	_menu_sub.text = subtitle
 	_menu.visible = true
@@ -232,10 +237,11 @@ func _process(delta: float) -> void:
 	if _hint_temp_t > 0.0:
 		_hint_temp_t -= delta
 	_hint.text = keys(_hint_temp if _hint_temp_t > 0.0 else _hint_persist)
+	_hint.visible = not _choice_active
 
 	if Input.is_action_just_pressed("debug_toggle"):
 		_debug_on = not _debug_on
-	_debug.visible = _debug_on
+	_debug.visible = _debug_on and not _choice_active
 	_debug_t -= delta
 	if _debug_on and _debug_t <= 0.0:
 		_debug_t = 0.25

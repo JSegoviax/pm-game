@@ -17,6 +17,7 @@ var _header: Label
 var _cond: Label
 var _desc: Label
 var _footer: Label
+var _evidence: Label
 var _style := StyleBoxFlat.new()
 var _style_sel := StyleBoxFlat.new()
 
@@ -60,6 +61,9 @@ func _ready() -> void:
 
 	_desc = _text(9, Vector2(20, 132), Vector2(280, 60))
 	_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_evidence = _text(8, Vector2(20, 186), Vector2(280, 26))
+	_evidence.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_evidence.add_theme_color_override("font_color", Color(0.90, 0.76, 0.45))
 	_footer = _text(8, Vector2(16, 216), Vector2(288, 14))
 	_footer.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_footer.add_theme_color_override("font_color", Color(0.62, 0.62, 0.66))
@@ -145,3 +149,8 @@ func _refresh(note: String) -> void:
 	else:
 		_desc.text = GameState.ITEMS[id].desc if id != "" else "Empty."
 	_footer.text = hud.keys("[{interact}] Use    [{inventory}] Close")
+	if GameState.leads.is_empty():
+		_evidence.text = ""
+	else:
+		var names := GameState.leads.map(func(l) -> String: return GameState.item_name(l))
+		_evidence.text = "Notebook, not yet sent: " + ", ".join(names)

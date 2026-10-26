@@ -78,17 +78,34 @@ func _ready() -> void:
 
 
 func _title_screen() -> String:
-	var opts := ["New Game"]
-	if GameState.has_save():
-		opts = ["Continue", "New Game"]
-	var i: int = await hud.choose("P.M.", opts, false, "A reporter. An occult compound.\nIt is not empty.", true)
-	return "continue" if opts[i] == "Continue" else "new"
+	while true:
+		var opts := []
+		if GameState.has_save():
+			opts.append("Continue the night")
+		opts.append("Send the next reporter" if GameState.has_history() else "New Game")
+		if GameState.has_history():
+			opts.append("Start over")
+		var i: int = await hud.choose("P.M.", opts, false, "A reporter. An occult compound.\nIt is not empty.", true)
+		match opts[i]:
+			"Continue the night":
+				return "continue"
+			"Start over":
+				var c: int = await hud.choose("Start over from nothing?",
+					["No", "Yes, erase everything"], true,
+					"Every reporter, all evidence sent and everything the compound remembers will be gone.")
+				if c == 1:
+					return "reset"
+			_:
+				return "night"
+	return "night"
 
 
 func _start(mode: String) -> void:
+	if mode == "reset":
+		GameState.reset_all()
 	var loaded := mode == "continue" and GameState.load_game()
 	if not loaded:
-		GameState.new_game()
+		GameState.new_night()
 	player.health = GameState.health
 	if loaded:
 		var p: Array = GameState.spawn.pos
@@ -106,16 +123,27 @@ func _start(mode: String) -> void:
 	_set_music(_room, 0.01)
 	_started = true
 
-	if loaded:
-		hud.show_message("Your notes are where you left them.", 3.0)
-	else:
-		hud.show_message("Compound of the Quiet Hour\n11:52 P.M.", 3.5)
 	hud.fade(0.0, 2.0)
-	if not GameState.tutorial_seen and not GameState.flags.get("tutorial_done", false):
+	if loaded:
+		hud.show_message("You pick up where you left off.", 3.0)
+	else:
+		_night_intro()
+	if not GameState.tutorial_seen and not GameState.meta.get("tutorial_done", false):
 		_tut_step = 0
 		_tut_t = -3.0
 		_tut_from = player.global_position
 	player.frozen = false
+
+
+## The opening beat of a night: who you are, and what the earlier reporters sent home.
+func _night_intro() -> void:
+	var n: int = GameState.meta.reporter
+	hud.show_message("Reporter #%d\nCompound of the Quiet Hour, 11:52 P.M." % n, 4.0)
+	var brief := GameState.briefing()
+	if brief == "":
+		return
+	await get_tree().create_timer(4.5, false).timeout
+	hud.show_message("The last reporter never came back. Before leaving, you read what they sent:\n" + brief, 7.0)
 
 
 # ---------------------------------------------------------------- environment
@@ -243,15 +271,25 @@ func _door(room: Node3D, local_pos: Vector3, to: Vector3, yaw: float, to_room: S
 func _pickup(id: String, pos: Vector3) -> void:
 	if GameState.flags.get("picked_" + id, false):
 		return
+	var is_lead := GameState.LEADS.has(id)
+	var kind: String = "lead" if is_lead else GameState.ITEMS[id].kind
 	var node := Node3D.new()
 	add_child(node)
 	node.global_position = pos
 	var mi := MeshInstance3D.new()
 	var mesh := BoxMesh.new()
-	mesh.size = Vector3(0.14, 0.05, 0.08) if GameState.ITEMS[id].kind == "key" else Vector3(0.16, 0.12, 0.16)
+	match kind:
+		"key": mesh.size = Vector3(0.14, 0.05, 0.08)
+		"lead": mesh.size = Vector3(0.22, 0.01, 0.28)
+		_: mesh.size = Vector3(0.16, 0.12, 0.16)
 	mi.mesh = mesh
+	if kind == "lead":
+		mi.rotation.y = GameState.rng("dressing").randf() * TAU
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.85, 0.68, 0.25) if GameState.ITEMS[id].kind == "key" else Color(0.92, 0.92, 0.88)
+	match kind:
+		"key": m.albedo_color = Color(0.85, 0.68, 0.25)
+		"lead": m.albedo_color = Color(0.86, 0.80, 0.64)
+		_: m.albedo_color = Color(0.92, 0.92, 0.88)
 	m.emission_enabled = true
 	m.emission = m.albedo_color * 0.4
 	mi.material_override = m
@@ -267,7 +305,7 @@ func _pickup(id: String, pos: Vector3) -> void:
 	var entry := _add_interactable(
 		func() -> Vector3: return pos,
 		1.5,
-		func() -> String: return "Pick up",
+		func() -> String: return "Read" if is_lead else "Pick up",
 		Callable())
 	entry.action = func() -> void: _take(id, node, entry)
 
@@ -335,6 +373,7 @@ func _build_hallway() -> void:
 	_door(hall, Vector3(0, 0, -7.94), RECORDS + Vector3(0, 0.05, 2.0), 0.0, "Records Room", {
 		"key": "key_east",
 		"flag": "door_records_open",
+		"label": "the Records Room door",
 		"text": "Locked. Someone has scratched two letters into the wood: P.M.",
 	})
 
@@ -364,11 +403,48 @@ func _build_records_room() -> void:
 		1.3,
 		func() -> String: return "Use typewriter",
 		_save_prompt)
+	# A chain and a three-digit padlock on the filing shelves
+	_box(room, Vector3(0.06, 0.12, 0.1), Vector3(2.42, 1.0, -1.5), _mat(Color(0.6, 0.6, 0.62)), false)
+	_add_interactable(
+		func() -> Vector3: return RECORDS + Vector3(2.0, 0, -1.5),
+		1.2,
+		_cabinet_prompt,
+		_cabinet_action)
+
+
+## Marked spots, Rogue Legacy style: rooms are hand-built and always the same; what sits on
+## these spots changes every night. `before_lock` spots can be reached without the Brass Key,
+## so the key always lands on one of them and every night can be finished.
+const MARKERS := [
+	{"id": "foyer_desk", "pos": FOYER + Vector3(-4.2, 1.05, 3.0), "before_lock": true},
+	{"id": "foyer_table", "pos": FOYER + Vector3(0.8, 0.93, -2.6), "before_lock": true},
+	{"id": "foyer_floor", "pos": FOYER + Vector3(4.6, 0.06, 1.5), "before_lock": true},
+	{"id": "hall_bench_n", "pos": HALL + Vector3(1.55, 0.53, -3.5), "before_lock": true},
+	{"id": "hall_bench_s", "pos": HALL + Vector3(-1.55, 0.53, 2.6), "before_lock": true},
+	{"id": "records_desk", "pos": RECORDS + Vector3(-1.0, 0.83, -2.1), "before_lock": false},
+	{"id": "records_cot", "pos": RECORDS + Vector3(2.4, 0.43, 1.4), "before_lock": false},
+]
 
 
 func _spawn_pickups() -> void:
-	_pickup("bandages", FOYER + Vector3(-4.2, 1.05, 3.0))       # on the reception desk
-	_pickup("key_east", HALL + Vector3(1.55, 0.53, -3.5))        # on the bench near him
+	var free := MARKERS.duplicate()
+	# Every spot is always drawn in the same order, even for things that won't appear, so a
+	# resumed night rebuilds exactly as it was.
+	var place := func(id: String, early_only: bool, show: bool) -> void:
+		var pool := free.filter(func(m) -> bool: return m.before_lock or not early_only)
+		var m = GameState.pick("items", pool)
+		if m == null:
+			return
+		free.erase(m)
+		if show:
+			_pickup(id, m.pos)
+
+	# The key first, on a spot you can reach. Once the door is open for good, no key is needed.
+	place.call("key_east", true, not GameState.world("door_records_open"))
+	place.call("bandages", false, true)
+	# Evidence the office doesn't have yet. Sent leads don't come back.
+	for id in ["lead_code", "lead_ledger"]:
+		place.call(id, false, not GameState.is_sent(id) or GameState.flags.get("picked_" + id, false))
 
 
 func _spawn_resident() -> void:
@@ -376,8 +452,14 @@ func _spawn_resident() -> void:
 	r.set_script(RESIDENT_SCRIPT)
 	r.name = "Resident"
 	add_child(r)
-	r.global_position = HALL + Vector3(0.6, 0.05, -5.8)
-	r.rotation.y = 0.0  # facing the photographs
+	# Where he stands tonight, from the residents' own stream
+	var spot: Dictionary = GameState.pick("residents", [
+		{"pos": Vector3(0.6, 0.05, -5.8), "yaw": 0.0},        # facing the far wall
+		{"pos": Vector3(-1.3, 0.05, -1.0), "yaw": PI / 2},    # facing the photographs
+		{"pos": Vector3(1.2, 0.05, -1.8), "yaw": -PI / 2},    # facing the sign-in sheets
+	])
+	r.global_position = HALL + spot.pos
+	r.rotation.y = spot.yaw
 	r.target = player
 	r.bounds = _hallway_bounds
 	r.spoke.connect(hud.show_message)
@@ -453,6 +535,8 @@ func _physics_process(delta: float) -> void:
 	if not _started:
 		return
 
+	if not _dead:
+		GameState.night_time += delta
 	_update_camera()
 	_tutorial_tick(delta)
 
@@ -499,6 +583,7 @@ func _update_camera(force := false) -> void:
 
 
 func _on_room_entered(room: String) -> void:
+	GameState.log_event("room", {"room": room})
 	_set_music(room)
 	match room:
 		"East Hallway":
@@ -516,20 +601,28 @@ func _on_room_entered(room: String) -> void:
 # ---------------------------------------------------------------- interactions
 
 func _door_prompt(d: Dictionary) -> String:
-	if d.has("key") and not GameState.flags.get(d.flag, false):
+	if d.has("key") and not GameState.world(d.flag):
 		return "Use " + GameState.item_name(d.key) if GameState.has_item(d.key) else "Examine door"
 	return "Open door"
 
 
 func _use_door(d: Dictionary) -> void:
-	if d.has("key") and not GameState.flags.get(d.flag, false):
+	if d.has("key") and not GameState.world(d.flag):
 		if GameState.has_item(d.key):
 			GameState.remove_item(d.key)
-			GameState.flags[d.flag] = true
+			GameState.remember(d.flag)  # the compound remembers: it stays unlocked for every reporter
+			GameState.log_event("opened", {"what": d.label})
 			hud.show_message("You used the %s. The door is unlocked." % GameState.item_name(d.key), 3.0)
 		else:
 			hud.show_message(d.text, 4.0)
 		return
+	if d.has("key") and not GameState.flags.get("through_" + d.flag, false):
+		GameState.flags["through_" + d.flag] = true
+		if GameState.meta.reporter > 1 and GameState.events.filter(func(e) -> bool: return e.type == "opened").is_empty():
+			hud.show_message("The lock hangs open. Someone came through here before you.", 3.0)
+			_busy = true
+			player.frozen = true
+			await get_tree().create_timer(1.5, false).timeout
 	_busy = true
 	player.frozen = true
 	await hud.fade(1.0, 0.45).finished
@@ -545,10 +638,18 @@ func _use_door(d: Dictionary) -> void:
 
 
 func _take(id: String, node: Node3D, entry: Dictionary) -> void:
+	if GameState.LEADS.has(id):
+		GameState.add_lead(id)
+		GameState.flags["picked_" + id] = true
+		interactables.erase(entry)
+		node.queue_free()
+		_read_lead(id)
+		return
 	if not GameState.add_item(id):
 		hud.show_message("You can't carry any more.", 2.5)
 		return
 	GameState.flags["picked_" + id] = true
+	GameState.log_event("pickup", {"id": id})
 	interactables.erase(entry)
 	node.queue_free()
 	hud.show_message("Picked up the %s." % GameState.item_name(id), 2.5)
@@ -569,8 +670,10 @@ func _resident_prompt(r: Node3D) -> String:
 func _resident_action(r: Node3D) -> void:
 	if r.can_talk():
 		player.face_point(r.global_position)
+		GameState.log_event("talk", {"who": "resident"})
 		r.engage(true)
 	elif r.is_hostile():
+		GameState.log_event("shove", {})
 		player.shove(r.global_position)
 		r.stagger(player.global_position)
 		hud.show_message("You shove him back. Go.", 1.6)
@@ -583,33 +686,120 @@ func _on_resident_hostile() -> void:
 		hud.flash_hint("You can't win a fight. [{interact}] Shove to break free, then get to a door.", 7.0)
 
 
-func _save_prompt() -> void:
+## Shows a lead you just found, then files it in the notebook.
+func _read_lead(id: String) -> void:
 	_busy = true
 	get_tree().paused = true
-	var i: int = await hud.choose("Type up your notes?", ["Yes", "No"], true, "Saves your progress.")
+	await hud.choose(GameState.item_name(id), ["Put it in your notebook"], false, GameState.lead_text(id, "desc"))
 	get_tree().paused = false
 	_busy = false
 	_ui_cd = 0.3
-	if i == 0:
-		var ok := GameState.save_game(player.global_position, player.rotation.y, player.health)
-		hud.show_message("You type up tonight's notes. Progress saved." if ok else "The typewriter jams. Couldn't save.", 3.0)
+	if not GameState.meta.get("hint_evidence", false):
+		GameState.meta["hint_evidence"] = true
+		GameState.save_meta()
+		hud.flash_hint("Evidence only counts once it's sent home. Find a typewriter.", 7.0)
+	else:
+		hud.show_message("Noted. It isn't safe until it's sent.", 2.5)
 
 
-func _on_player_hurt(_health: int) -> void:
+func _cabinet_prompt() -> String:
+	if GameState.world("cabinet_open"):
+		return "" if GameState.flags.get("cabinet_searched", false) else "Search cabinet"
+	return "Open padlock" if GameState.knows("cabinet_code") else "Examine cabinet"
+
+
+func _cabinet_action() -> void:
+	if not GameState.world("cabinet_open"):
+		if not GameState.knows("cabinet_code"):
+			hud.show_message("A filing cabinet, chained shut with a three-digit padlock. You don't know the code.", 4.0)
+			return
+		GameState.remember("cabinet_open")
+		GameState.log_event("opened", {"what": "the records cabinet"})
+		hud.show_message("You dial %s. The padlock falls open." % GameState.fact("cabinet_code"), 3.0)
+		return
+	GameState.flags["cabinet_searched"] = true
+	if not GameState.is_sent("lead_shipping"):
+		GameState.add_lead("lead_shipping")
+		_read_lead("lead_shipping")
+	elif GameState.add_item("bandages"):
+		GameState.log_event("pickup", {"id": "bandages"})
+		hud.show_message("Behind the files, a first-aid tin. You take the Bandages.", 3.0)
+	else:
+		hud.show_message("Only files. Nothing you can use.", 2.5)
+
+
+func _save_prompt() -> void:
+	_busy = true
+	get_tree().paused = true
+	var can_send := GameState.sendable()
+	var opts := []
+	if not can_send.is_empty():
+		opts.append("Send evidence home (%d)" % can_send.size())
+	opts.append("Pause the night")
+	opts.append("Leave it")
+	var sub := "Nothing to send yet." if can_send.is_empty() \
+		else "What you send is safe for good. The night goes on."
+	var i: int = await hud.choose("The typewriter", opts, true, sub)
+	var pick: String = opts[i] if i >= 0 else "Leave it"
+	if pick.begins_with("Send"):
+		var text := GameState.send_leads()
+		await hud.choose("Dispatch sent", ["Keep going"], false, text)
+	elif pick == "Pause the night":
+		var c: int = await hud.choose("Pause here and return to the title?", ["Pause", "Keep going"], true,
+			"You can pick up from this spot later. It won't save you if you die.")
+		if c == 0:
+			GameState.save_game(player.global_position, player.rotation.y, player.health)
+			get_tree().paused = false
+			await hud.fade(1.0, 0.8).finished
+			get_tree().reload_current_scene()
+			return
+	get_tree().paused = false
+	_busy = false
+	_ui_cd = 0.3
+
+
+func _on_player_hurt(health: int) -> void:
+	GameState.log_event("hurt", {"room": _room, "health": health})
 	hud.flash()
 	hud.show_condition(player.condition())
 
 
+## The reporter is gone. There's no going back to a safe room: the night is reviewed,
+## and the next reporter is sent.
 func _on_player_died() -> void:
 	_dead = true
 	hud.set_prompt("")
 	hud.set_hint("")
+	var summary := GameState.end_night("caught in " + _room)
 	await get_tree().create_timer(0.8).timeout
 	await hud.fade(1.0, 1.6).finished
 	hud.show_message("The meeting will begin without you.", 4.0)
 	await get_tree().create_timer(3.5).timeout
-	GameState.pending = "continue" if GameState.has_save() else "new"
+	hud.show_message("")
+	await hud.choose("POST-MORTEM", ["Send the next reporter"], false, _post_mortem_text(summary))
+	GameState.pending = "night"
 	get_tree().reload_current_scene()
+
+
+func _post_mortem_text(s: Dictionary) -> String:
+	var t := int(s.time)
+	var lines := [
+		"Reporter #%d went missing in the compound after %d:%02d. Last seen: %s." % [s.reporter, t / 60, t % 60, s.cause.trim_prefix("caught in ")],
+		"",
+		"Went well: " + ("sent %s home." % _join(s.sent) if not s.sent.is_empty() else "nothing reached the office."),
+		"Went wrong: " + ("lost %s with them." % _join(s.lost) if not s.lost.is_empty() else "%d %s taken." % [s.hits, "hit" if s.hits == 1 else "hits"]),
+	]
+	if not s.opened.is_empty():
+		lines.append("Left open for the next reporter: " + _join(s.opened) + ".")
+	lines.append("")
+	lines.append("Night seed %d" % s.night_seed)
+	return "\n".join(lines)
+
+
+func _join(items: Array) -> String:
+	if items.size() <= 1:
+		return "".join(items)
+	return ", ".join(items.slice(0, -1)) + " and " + items[-1]
 
 
 # ---------------------------------------------------------------- tutorial
@@ -644,4 +834,5 @@ func _tutorial_tick(delta: float) -> void:
 			_tut_step = -1
 			hud.set_hint("")
 			GameState.tutorial_seen = true
-			GameState.flags["tutorial_done"] = true
+			GameState.meta["tutorial_done"] = true
+			GameState.save_meta()
