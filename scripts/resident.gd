@@ -16,6 +16,11 @@ enum State { IDLE, TALKING, STALKING, WINDUP, LUNGE, RECOVER, STUNNED, ASLEEP, S
 ## lucid; talks but only turns on you if you attack him. "worshipper" and "nurse": like members.
 @export var kind := "member"
 @export var resident_id := "hall"
+## How roused the compound must be before this resident turns on you: 1 Uneasy, 2 Roused,
+## 99 never (only if attacked). Below it, they talk, watch you, and let you pass.
+@export var threshold := 1
+## Said when the compound's alert reaches this resident's threshold and they turn.
+@export var turn_line := "He stops smiling."
 
 const MAX_HP := 6
 const RISE_HP := 4          # they come back weaker, but they come back
@@ -60,6 +65,8 @@ var hp := MAX_HP
 var finished_by := ""   # "burned" or "axe" once the body is finished
 var down_time := DOWN_TIME
 var _warned := false
+var provoked := false     # attacked or shot at: hostile whatever the alert
+var _talked := false      # said his piece; won't start talking on his own again
 var _rise_from := RISE_TIME
 var _timer := 0.0
 var _hit_this_lunge := false
@@ -136,6 +143,16 @@ func can_talk() -> bool:
 	return state == State.IDLE
 
 
+## Whether this resident is willing to attack you right now.
+func wants_you() -> bool:
+	return provoked or GameState.alert() >= threshold
+
+
+func _turn() -> void:
+	state = State.STALKING
+	turned_hostile.emit()
+
+
 func is_hostile() -> bool:
 	return state in [State.STALKING, State.WINDUP, State.LUNGE, State.RECOVER, State.STUNNED]
 
@@ -164,6 +181,7 @@ func damage(amount: int, from: Vector3) -> bool:
 	if state == State.STUNNED:
 		amount *= 2
 	hp -= amount
+	provoked = true
 	if hp <= 0:
 		_go_down()
 		return true
@@ -172,8 +190,7 @@ func damage(amount: int, from: Vector3) -> bool:
 		_wake()
 		return false
 	if not is_hostile():
-		state = State.STALKING
-		turned_hostile.emit()
+		_turn()
 	stagger(from, 0.9)
 	return false
 
@@ -181,6 +198,7 @@ func damage(amount: int, from: Vector3) -> bool:
 ## A gunshot nearby. Sleepers in the same room wake up.
 func hear(from: Vector3) -> void:
 	if state in [State.ASLEEP, State.STIRRING] and bounds.has_point(from + Vector3(0, 0.5, 0)):
+		provoked = true
 		_wake()
 
 
@@ -221,7 +239,6 @@ func _wake() -> void:
 	state = State.RISING
 	_timer = WAKE_RISE
 	_rise_from = WAKE_RISE
-	turned_hostile.emit()
 
 
 func _go_down() -> void:
@@ -244,6 +261,7 @@ func engage(by_player: bool) -> void:
 
 ## Used when loading a save after he has already turned.
 func start_hostile() -> void:
+	provoked = true
 	state = State.STALKING
 
 
@@ -311,12 +329,25 @@ func _physics_process(delta: float) -> void:
 				_body.rotation = Vector3.ZERO
 				_body.position = Vector3.ZERO
 				collision_layer = 1
-				hp = RISE_HP if hp <= 0 else hp
-				state = State.STALKING
+				var was_down := hp <= 0
+				hp = RISE_HP if was_down else hp
 				rose.emit()
+				if was_down or wants_you():
+					_turn()
+				else:
+					# Woken, but the compound is calm: he stands and stares.
+					state = State.IDLE
+					_talked = true
+					spoke.emit("He sits up and watches you. He doesn't lie back down.", 3.0)
 		State.IDLE:
-			if target_here and dist < NOTICE_RANGE and kind != "benefactor":
+			# Once he's spoken (or if he never does), he watches you go by.
+			if (_talked or lines.is_empty()) and target_here and dist < TALK_RANGE * 1.5:
+				_face(to_target, delta * 0.3)
+			if target_here and dist < NOTICE_RANGE and not _talked and not lines.is_empty():
 				engage(false)
+			elif target_here and dist < TALK_RANGE * 2.0 and wants_you():
+				spoke.emit(turn_line, 2.5)
+				_turn()
 		State.TALKING:
 			_face(to_target, delta * 0.6)
 		State.STALKING:
@@ -381,8 +412,8 @@ func _talk(say: PackedStringArray) -> void:
 			return
 	if state != State.TALKING:
 		return
-	if kind == "benefactor":
-		state = State.IDLE  # he has said his piece; he'll say it again
-		return
-	state = State.STALKING
-	turned_hostile.emit()
+	_talked = true
+	if wants_you():
+		_turn()
+	else:
+		state = State.IDLE  # he has said his piece; he'll watch you, and say it again if asked

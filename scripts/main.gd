@@ -892,24 +892,24 @@ func _spawn_pickups() -> void:
 
 ## Who is where tonight. Each room has a few spots and a chance; the hallway always has someone.
 const CAST := [
-	{"id": "hall", "kind": "member", "room": "East Hallway", "chance": 1.0, "spots": [
+	{"id": "hall", "kind": "member", "room": "East Hallway", "chance": 1.0, "threshold": 1, "turn": "He stops smiling.", "spots": [
 		[HALL + Vector3(0.6, 0.05, -5.8), 0.0], [HALL + Vector3(-1.3, 0.05, -1.0), PI / 2], [HALL + Vector3(1.2, 0.05, -1.8), -PI / 2]]},
-	{"id": "benefactor", "kind": "benefactor", "room": "Welcome Hall", "chance": 0.6, "spots": [
+	{"id": "benefactor", "kind": "benefactor", "room": "Welcome Hall", "chance": 0.6, "threshold": 99, "turn": "", "spots": [
 		[WELCOME + Vector3(0.0, 0.05, -3.4), PI], [WELCOME + Vector3(-3.6, 0.05, -2.8), PI / 2]]},
-	{"id": "chapel", "kind": "worshipper", "room": "Chapel", "chance": 0.7, "spots": [
+	{"id": "chapel", "kind": "worshipper", "room": "Chapel", "chance": 0.7, "threshold": 2, "turn": "She stops counting.", "spots": [
 		[CHAPEL + Vector3(0.0, 0.05, -5.0), 0.0], [CHAPEL + Vector3(-0.6, 0.05, -1.4), 0.0]]},
-	{"id": "nurse", "kind": "nurse", "room": "Infirmary", "chance": 0.7, "spots": [
+	{"id": "nurse", "kind": "nurse", "room": "Infirmary", "chance": 0.7, "threshold": 2, "turn": "\"It's time for your dose.\"", "spots": [
 		[INFIRMARY + Vector3(0.0, 0.05, -0.4), 0.0], [INFIRMARY + Vector3(-1.5, 0.05, -1.6), PI]]},
-	{"id": "sleeper_a", "kind": "sleeper", "room": "Dormitory", "chance": 1.0, "spots": [
+	{"id": "sleeper_a", "kind": "sleeper", "room": "Dormitory", "chance": 1.0, "threshold": 1, "turn": "He swings his legs off the bunk.", "spots": [
 		[DORM + Vector3(-1.8, 0.05, -2.6), 0.0], [DORM + Vector3(0.4, 0.05, 0.6), 0.0]]},
-	{"id": "sleeper_b", "kind": "sleeper", "room": "Dormitory", "chance": 0.5, "spots": [
+	{"id": "sleeper_b", "kind": "sleeper", "room": "Dormitory", "chance": 0.5, "threshold": 1, "turn": "Someone in the bunks sits up.", "spots": [
 		[DORM + Vector3(-4.0, 0.05, 0.6), 0.0], [DORM + Vector3(2.6, 0.05, 0.6), 0.0]]},
 ]
 
 const TALK := {
 	"member": {
 		"notice": ["\"Visiting hours ended at eleven. Everyone's downstairs for the meeting.\"", "He keeps smiling. He hasn't blinked once."],
-		"talk": ["\"Excuse me. I'm with the Courier. I'm looking for whoever's in charge.\"", "He turns around slowly. \"Everyone is in charge. Everyone is downstairs.\"", "\"You should be downstairs too.\" He hasn't blinked once."],
+		"talk": ["\"Excuse me. I'm with the Courier. I'm looking for whoever's in charge.\"", "He turns around slowly. \"Everyone is in charge. Everyone is downstairs.\"", "\"You should be downstairs too. Don't go into the Records Room.\" He hasn't blinked once."],
 	},
 	"benefactor": {
 		"notice": [],
@@ -943,6 +943,8 @@ func _spawn_resident(c: Dictionary, pos: Vector3, yaw: float) -> void:
 	r.name = "Resident_" + c.id
 	r.kind = c.kind
 	r.resident_id = c.id
+	r.threshold = int(c.threshold)
+	r.turn_line = c.turn
 	r.lines = PackedStringArray(TALK[c.kind].notice)
 	r.talk_lines = PackedStringArray(TALK[c.kind].talk)
 	add_child(r)
@@ -1101,9 +1103,39 @@ func _update_camera(force := false) -> void:
 			return
 
 
+## Story beats that rouse the compound. Each raises the alert once per night.
+const BEATS := {
+	1: "Somewhere below, a bell rings once. All over the building, doors close.",
+	2: "The speakers crackle. An old man's voice, very calm: \"We have a guest. Please make our guest welcome.\"",
+}
+
+
+func _rouse(level: int, why: String) -> void:
+	if level <= GameState.alert():
+		return
+	GameState.flags["alert"] = level
+	GameState.log_event("alert", {"level": level, "why": why})
+	await get_tree().create_timer(1.2, false).timeout
+	hud.show_message(BEATS[level], 5.0)
+	# The lights dip as the compound wakes
+	for f in _flicker_lights:
+		if is_instance_valid(f.light):
+			var l: OmniLight3D = f.light
+			var t := create_tween()
+			t.tween_property(l, "light_energy", 0.1, 0.15)
+			t.tween_property(l, "light_energy", f.base, 0.6)
+
+
 func _on_room_entered(room: String) -> void:
 	GameState.log_event("room", {"room": room})
 	_set_music(room)
+	match room:
+		"Records Room":
+			_rouse(1, "entered the Records Room")
+		"Infirmary":
+			_rouse(2, "entered the Infirmary")
+		"Basement Stairs":
+			_rouse(2, "entered the Basement Stairs")
 	match room:
 		"East Hallway":
 			if not GameState.flags.get("seen_hallway", false):
@@ -1131,6 +1163,7 @@ func _use_door(d: Dictionary) -> void:
 			GameState.remove_item(d.key)
 			GameState.remember(d.flag)  # the compound remembers: it stays unlocked for every reporter
 			GameState.log_event("opened", {"what": d.label})
+			_rouse(2 if d.flag == LOCK_INFIRMARY else 1, "unlocked " + d.label)
 			hud.show_message("You used the %s. The door is unlocked." % GameState.item_name(d.key), 3.0)
 		else:
 			hud.show_message(d.text, 4.0)

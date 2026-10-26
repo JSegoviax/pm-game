@@ -7,7 +7,7 @@ extends Node
 ## - The META: what survives. Evidence sent home, facts locked in by that evidence, and the
 ##   compound's memory (doors that stay open). Lives in META_PATH.
 
-const VERSION := "0.5.1"
+const VERSION := "0.5.2"
 const SAVE_PATH := "user://save.json"   # a paused night
 const META_PATH := "user://meta.json"   # everything that carries over
 const MAX_SLOTS := 6
@@ -244,6 +244,11 @@ func fact(name: String) -> String:
 ## Whether this reporter knows a fact: briefed from evidence sent home, or found tonight.
 func knows(name: String) -> bool:
 	return meta.facts.has(name) or flags.get("know_" + name, false)
+
+
+## How roused the compound is tonight: 0 Calm, 1 Uneasy, 2 Roused. Resets each night.
+func alert() -> int:
+	return int(flags.get("alert", 0))
 
 
 func world(key: String) -> bool:

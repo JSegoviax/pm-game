@@ -48,6 +48,14 @@ Items and evidence land on marked spots that change every night. Keys always lan
 
 Every door has a lamp above it. A red lamp means the door is locked.
 
+## Build-up: the compound starts calm
+
+Every night starts **Calm**: residents talk to you, watch you and let you pass. They only attack if you attack them (or fire near them). Story beats raise the alert for the rest of the night:
+
+- **Uneasy** when you first unlock or enter the Records Room: a bell rings below. The hallway member and the dormitory sleepers now turn when they see you.
+- **Roused** when you first unlock or enter the Infirmary, or go down the Basement Stairs: the founder speaks over the speakers. The worshipper and the nurse now turn too.
+- The benefactor never turns unless attacked.
+
 ## Fighting
 
 - **Ready a weapon** from the inventory (picking one up readies it if your hands are empty). Hold **Aim** (Q, right-click, or R1) to raise it: your feet stay planted and you can still turn. Press **interact** to swing or fire.
@@ -84,4 +92,5 @@ Headless tests live in `tests/` and can be rerun anytime:
 ```
 godot --headless --path . -s tests/test_compound_and_combat.gd
 godot --headless --path . -s tests/test_recorder.gd
+godot --headless --path . -s tests/test_buildup.gd
 ```
