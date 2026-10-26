@@ -7,7 +7,7 @@ extends Node
 ## - The META: what survives. Evidence sent home, facts locked in by that evidence, and the
 ##   compound's memory (doors that stay open). Lives in META_PATH.
 
-const VERSION := "0.4.1"
+const VERSION := "0.4.2"
 const SAVE_PATH := "user://save.json"   # a paused night
 const META_PATH := "user://meta.json"   # everything that carries over
 const MAX_SLOTS := 6
@@ -34,20 +34,20 @@ const LEADS := {
 	"lead_code": {
 		"name": "Note with numbers",
 		"desc": "Torn from a pocket diary: \"Records cabinet. {cabinet_code}. Don't let Brother Ames see.\"",
-		"words": "RECORDS CABINET CODE {cabinet_code}.",
+		"words": "RECORDS ROOM CABINET PADLOCK CODE IS {cabinet_code}",
 		"reveals": "cabinet_code",
 		"channel": 1,
 	},
 	"lead_ledger": {
 		"name": "Donation ledger",
 		"desc": "A page of member donations. The sums are absurd for a church this size, and every one is marked \"for the Work.\"",
-		"words": "CHURCH TAKING HUGE SUMS. FOR THE WORK.",
+		"words": "CHURCH TAKING HUGE DONATIONS FOR THE WORK",
 		"channel": 1,
 	},
 	"lead_shipping": {
 		"name": "Shipping slip",
 		"desc": "A courier slip for twelve crates of \"tonic\" to addresses across the city. Dated this week.",
-		"words": "TONIC CRATES SHIPPING TO CITY. THIS WEEK.",
+		"words": "TWELVE CRATES OF TONIC SHIPPING ACROSS CITY THIS WEEK",
 		"channel": 1,
 	},
 }
@@ -63,6 +63,7 @@ var leads: Array[String] = []   # found tonight, not yet sent
 var night_facts := {}           # facts rolled tonight that aren't locked yet
 var events: Array = []             # [{"t": seconds, "type": String, ...}]
 var night_time := 0.0           # seconds since the night began
+var run_file := ""              # the Recorder's file for this night
 
 ## Set before reloading the scene: "continue", "night" (new reporter) or "reset" skips the title.
 var pending := ""
@@ -136,6 +137,7 @@ func new_night() -> void:
 	night_facts = {}
 	events = []
 	night_time = 0.0
+	run_file = ""
 	_streams = {}
 	var r := RandomNumberGenerator.new()
 	r.randomize()
@@ -251,34 +253,45 @@ func sendable() -> Array:
 	return leads.filter(func(id) -> bool: return int(LEADS[id].channel) <= int(meta.channel))
 
 
-## Sends evidence home. Returns the dispatch text. What's sent is permanent.
-func send_leads() -> String:
+## Sends evidence home. Returns the dispatch as telegram lines. What's sent is permanent.
+func send_leads() -> Array:
 	var ids := sendable()
 	if ids.is_empty():
-		return ""
-	var words := []
+		return []
+	var lines := []
 	for id in ids:
-		words.append(lead_text(id, "words"))
+		lines.append(lead_text(id, "words") + " STOP")
 		if LEADS[id].has("reveals"):
 			var f: String = LEADS[id].reveals
 			meta.facts[f] = fact(f)
 		meta.sent.append(id)
 		leads.erase(id)
-	var text := " ".join(words) + " STOP."
-	meta.dispatches.append({"reporter": meta.reporter, "text": text})
-	log_event("dispatch", {"ids": ids, "text": text})
+	var header := "TO CITY DESK FROM REPORTER %d  %s" % [int(meta.reporter), clock_time()]
+	meta.dispatches.append({"reporter": meta.reporter, "header": header, "lines": lines})
+	log_event("dispatch", {"ids": ids, "lines": lines})
 	save_meta()
-	return text
+	return [header] + lines
 
 
-## What the next reporter read before leaving for the compound.
-func briefing() -> String:
-	if meta.dispatches.is_empty():
-		return ""
-	var lines := []
-	for d in meta.dispatches.slice(-3):
-		lines.append(d.text)
-	return "\n".join(lines)
+## The time inside the compound: each night starts at 11:52 P.M.
+func clock_time() -> String:
+	var m := 23 * 60 + 52 + int(night_time / 60.0)
+	var h := (m / 60) % 24
+	var suffix := "P.M." if h >= 12 else "A.M."
+	var h12 := h % 12
+	if h12 == 0:
+		h12 = 12
+	return "%d:%02d %s" % [h12, m % 60, suffix]
+
+
+## Every line the office has received, oldest first, for the next reporter to read.
+func briefing() -> Array:
+	var out := []
+	for d in meta.dispatches:
+		for line in d.get("lines", [d.get("text", "")] if d.has("text") else []):
+			if not out.has(line):
+				out.append(line)
+	return out
 
 
 # ---------------------------------------------------------------- the end of a night
@@ -341,6 +354,7 @@ func save_game(pos: Vector3, yaw: float, hp: int) -> bool:
 		"night_facts": night_facts.duplicate(),
 		"log": events.duplicate(true),
 		"night_time": night_time,
+		"run_file": run_file,
 		"saved_at": Time.get_datetime_string_from_system(),
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
@@ -365,5 +379,6 @@ func load_game() -> bool:
 	night_facts = data.get("night_facts", {})
 	events = data.get("log", [])
 	night_time = float(data.get("night_time", 0.0))
+	run_file = str(data.get("run_file", ""))
 	_streams = {}
 	return true

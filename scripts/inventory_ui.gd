@@ -122,6 +122,7 @@ func _use() -> void:
 	if id == "":
 		return
 	var item: Dictionary = GameState.ITEMS[id]
+	GameState.log_event("use", {"id": id, "health": player.health})
 	match item.kind:
 		"heal":
 			if player.health >= player.MAX_HEALTH:

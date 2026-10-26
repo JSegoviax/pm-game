@@ -148,6 +148,8 @@ func keys(text: String) -> String:
 
 
 func show_message(text: String, seconds := 2.5) -> void:
+	if text != "":
+		GameState.log_event("message", {"text": keys(text)})
 	_message.text = keys(text)
 	_message_t = seconds
 
@@ -185,6 +187,7 @@ func set_hint(text: String) -> void:
 
 ## A hint that shows for a few seconds, then gives the slot back.
 func flash_hint(text: String, seconds := 5.0) -> void:
+	GameState.log_event("hint", {"text": keys(text)})
 	_hint_temp = text
 	_hint_temp_t = seconds
 
@@ -209,7 +212,9 @@ func choose(title: String, options: Array, allow_cancel := true, subtitle := "",
 	_menu.visible = true
 	_choice_active = true
 	_refresh_menu()
+	GameState.log_event("menu", {"title": title, "options": options, "body": subtitle})
 	var picked: int = await _picked
+	GameState.log_event("picked", {"option": options[picked] if picked >= 0 and picked < options.size() else "cancelled"})
 	_choice_active = false
 	_menu.visible = false
 	return picked
@@ -238,6 +243,7 @@ func _process(delta: float) -> void:
 		_hint_temp_t -= delta
 	_hint.text = keys(_hint_temp if _hint_temp_t > 0.0 else _hint_persist)
 	_hint.visible = not _choice_active
+	_message.visible = not _choice_active
 
 	if Input.is_action_just_pressed("debug_toggle"):
 		_debug_on = not _debug_on

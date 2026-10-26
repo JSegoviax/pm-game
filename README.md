@@ -34,6 +34,16 @@ The version number and performance stats (FPS, CPU and GPU frame time, draw call
 - The typewriter can also pause the night so you can quit and pick it up later. Pausing never protects you from death.
 - **Start over** on the title screen erases everything and begins again from the first reporter.
 
+## Run reports (for troubleshooting)
+
+Every night is recorded to `~/PMRuns` on your computer, like a QA session attached to a bug ticket:
+
+- `<date>_r<reporter>_seed<seed>.json`: the full record for Claude. Setup, every event, the player's and resident's positions five times a second, health, keys held, and the outcome.
+- `<date>_r<reporter>_seed<seed>.txt`: the same night as a readable timeline.
+- Press **F9** (R3 on a controller) to flag a moment. It's marked in the log and a screenshot is saved next to the run.
+
+The file updates every few seconds, so a crash still leaves a record. The newest 40 runs are kept.
+
 ## Milestones
 
 - [x] **1. Room prototype:** two rooms, fixed camera angles, tank controls, door transitions

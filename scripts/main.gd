@@ -63,7 +63,9 @@ func _ready() -> void:
 	player.global_position = START_POS
 	player.frozen = true
 	player.hurt.connect(_on_player_hurt)
-	player.healed.connect(func(_h: int) -> void: hud.show_condition(player.condition()))
+	player.healed.connect(func(h: int) -> void:
+		GameState.log_event("healed", {"health": h})
+		hud.show_condition(player.condition()))
 	player.died.connect(_on_player_died)
 	inventory_ui.player = player
 	inventory_ui.hud = hud
@@ -115,8 +117,13 @@ func _start(mode: String) -> void:
 		player.global_position = START_POS
 		player.face(0.0)
 
+	if loaded:
+		Recorder.resume(self)
+	else:
+		Recorder.begin(self)
 	_spawn_pickups()
 	_spawn_resident()
+	Recorder.flush()
 	_update_camera(true)
 	_music_dread.play()
 	_music_calm.play()
@@ -139,11 +146,20 @@ func _start(mode: String) -> void:
 func _night_intro() -> void:
 	var n: int = GameState.meta.reporter
 	hud.show_message("Reporter #%d\nCompound of the Quiet Hour, 11:52 P.M." % n, 4.0)
-	var brief := GameState.briefing()
-	if brief == "":
+	var brief: Array = GameState.briefing()
+	if brief.is_empty():
 		return
 	await get_tree().create_timer(4.5, false).timeout
-	hud.show_message("The last reporter never came back. Before leaving, you read what they sent:\n" + brief, 7.0)
+	if _dead or _busy:
+		return
+	_busy = true
+	get_tree().paused = true
+	var who := "The last reporter never came back." if n == 2 else "%d reporters have gone in. None came back." % (n - 1)
+	await hud.choose("Before you left", ["Go in"], false,
+		who + " The office has what they sent:\n\n" + "\n".join(brief.slice(-8)))
+	get_tree().paused = false
+	_busy = false
+	_ui_cd = 0.3
 
 
 # ---------------------------------------------------------------- environment
@@ -438,6 +454,7 @@ func _spawn_pickups() -> void:
 		free.erase(m)
 		if show:
 			_pickup(id, m.pos)
+			Recorder.placed[id] = m.id
 
 	# The key first, on a spot you can reach. Once the door is open for good, no key is needed.
 	place.call("key_east", true, not GameState.world("door_records_open"))
@@ -460,6 +477,7 @@ func _spawn_resident() -> void:
 	])
 	r.global_position = HALL + spot.pos
 	r.rotation.y = spot.yaw
+	Recorder.placed["resident"] = "hall (%.1f, %.1f)" % [spot.pos.x, spot.pos.z]
 	r.target = player
 	r.bounds = _hallway_bounds
 	r.spoke.connect(hud.show_message)
@@ -545,6 +563,7 @@ func _physics_process(delta: float) -> void:
 		return
 	if Input.is_action_just_pressed("inventory") and _ui_cd <= 0.0 and player.can_act():
 		hud.set_prompt("")
+		GameState.log_event("inventory", {})
 		inventory_ui.open()
 		return
 
@@ -563,6 +582,7 @@ func _physics_process(delta: float) -> void:
 	hud.set_prompt("" if best == null else "[{interact}] " + best_prompt)
 	if best != null and _ui_cd <= 0.0 and player.can_act() and Input.is_action_just_pressed("interact"):
 		_interacted = true
+		GameState.log_event("interact", {"prompt": best_prompt})
 		best.action.call()
 
 
@@ -737,18 +757,21 @@ func _save_prompt() -> void:
 		opts.append("Send evidence home (%d)" % can_send.size())
 	opts.append("Pause the night")
 	opts.append("Leave it")
-	var sub := "Nothing to send yet." if can_send.is_empty() \
-		else "What you send is safe for good. The night goes on."
+	var sub := "Nothing to send yet. Evidence you find goes in your notebook until you send it." if can_send.is_empty() \
+		else "Ready to send: %s.\nOnce sent, it's safe even if you don't make it out. The night goes on." % ", ".join(can_send.map(func(id) -> String: return GameState.item_name(id)))
 	var i: int = await hud.choose("The typewriter", opts, true, sub)
 	var pick: String = opts[i] if i >= 0 else "Leave it"
 	if pick.begins_with("Send"):
-		var text := GameState.send_leads()
-		await hud.choose("Dispatch sent", ["Keep going"], false, text)
+		var lines: Array = GameState.send_leads()
+		await hud.choose("Dispatch sent", ["Keep going"], false,
+			lines[0] + "\n\n" + "\n".join(lines.slice(1)) + "\n\nSafe now, even if you don't come back.")
 	elif pick == "Pause the night":
 		var c: int = await hud.choose("Pause here and return to the title?", ["Pause", "Keep going"], true,
 			"You can pick up from this spot later. It won't save you if you die.")
 		if c == 0:
+			GameState.log_event("paused", {})
 			GameState.save_game(player.global_position, player.rotation.y, player.health)
+			Recorder.finish("paused")
 			get_tree().paused = false
 			await hud.fade(1.0, 0.8).finished
 			get_tree().reload_current_scene()
@@ -771,6 +794,7 @@ func _on_player_died() -> void:
 	hud.set_prompt("")
 	hud.set_hint("")
 	var summary := GameState.end_night("caught in " + _room)
+	Recorder.finish("missing", summary)
 	await get_tree().create_timer(0.8).timeout
 	await hud.fade(1.0, 1.6).finished
 	hud.show_message("The meeting will begin without you.", 4.0)
