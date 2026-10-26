@@ -7,7 +7,7 @@ extends Node
 ## - The META: what survives. Evidence sent home, facts locked in by that evidence, and the
 ##   compound's memory (doors that stay open). Lives in META_PATH.
 
-const VERSION := "0.5.4"
+const VERSION := "0.5.5"
 const SAVE_PATH := "user://save.json"   # a paused night
 const META_PATH := "user://meta.json"   # everything that carries over
 const MAX_SLOTS := 6
@@ -140,8 +140,32 @@ var _streams := {}
 var meta := {}
 
 
+## Player settings. Saved on their own, so "Start over" never resets them.
+const SETTINGS_PATH := "user://settings.json"
+var settings := {
+	"aim_assist": false,   # raising a weapon turns you toward the nearest hostile resident
+}
+
+
 func _ready() -> void:
 	load_meta()
+	load_settings()
+
+
+func load_settings() -> void:
+	if not FileAccess.file_exists(SETTINGS_PATH):
+		return
+	var data = JSON.parse_string(FileAccess.get_file_as_string(SETTINGS_PATH))
+	if typeof(data) == TYPE_DICTIONARY:
+		for k in settings:
+			if data.has(k):
+				settings[k] = data[k]
+
+
+func save_settings() -> void:
+	var f := FileAccess.open(SETTINGS_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(settings))
 
 
 func _blank_meta() -> Dictionary:

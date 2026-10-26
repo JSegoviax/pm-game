@@ -39,6 +39,7 @@ var interactables: Array = []  # { pos: Callable, range, prompt: Callable, actio
 var _flicker_lights: Array = []
 var _bounds := {}               # room name -> AABB, so residents stay in their room
 var residents: Array = []
+var _was_aiming := false
 var _locked_lamps: Array = []  # {flag, bulb, light}: red until the lock is open for good
 var doors: Array = []          # {pos, inward, to_room, hidden}: every door, for the camera audit
 var _room := ""
@@ -108,12 +109,15 @@ func _title_screen() -> String:
 		if GameState.has_save():
 			opts.append("Continue the night")
 		opts.append("Send the next reporter" if GameState.has_history() else "New Game")
+		opts.append("Settings")
 		if GameState.has_history():
 			opts.append("Start over")
 		var i: int = await hud.choose("P.M.", opts, false, "A reporter. An occult compound.\nIt is not empty.", true)
 		match opts[i]:
 			"Continue the night":
 				return "continue"
+			"Settings":
+				await _settings_menu()
 			"Start over":
 				var c: int = await hud.choose("Start over from nothing?",
 					["No", "Yes, erase everything"], true,
@@ -123,6 +127,19 @@ func _title_screen() -> String:
 			_:
 				return "night"
 	return "night"
+
+
+func _settings_menu() -> void:
+	while true:
+		var aim: bool = GameState.settings.aim_assist
+		var opts := ["Aim assist: " + ("On" if aim else "Off"), "Back"]
+		var i: int = await hud.choose("Settings", opts, true,
+			"Aim assist: raising a weapon turns you toward the nearest resident who is already after you.")
+		if i == 0:
+			GameState.settings.aim_assist = not aim
+			GameState.save_settings()
+		else:
+			return
 
 
 func _start(mode: String) -> void:
@@ -1337,6 +1354,9 @@ func _physics_process(delta: float) -> void:
 		inventory_ui.open()
 		return
 
+	if player.aiming and not _was_aiming and GameState.settings.aim_assist:
+		_assist_turn()
+	_was_aiming = player.aiming
 	if player.aiming:
 		hud.set_weapon(GameState.weapon_label())
 		hud.set_prompt(_attack_prompt())
@@ -1653,6 +1673,38 @@ func _say(line: String) -> void:
 	get_tree().paused = false
 	_busy = false
 	_ui_cd = 0.3
+
+
+## Aim assist (a setting, off by default): turn toward the nearest hostile resident within 45°.
+const ASSIST_CONE := 45.0
+const ASSIST_RANGE := 12.0
+
+func _assist_turn() -> void:
+	var fwd := -player.global_transform.basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	var best: Node3D = null
+	var best_d := INF
+	for r in residents:
+		if not is_instance_valid(r) or not r.is_hostile():
+			continue
+		var to: Vector3 = r.global_position - player.global_position
+		to.y = 0.0
+		var d := to.length()
+		if d < 0.01 or d > ASSIST_RANGE:
+			continue
+		if rad_to_deg(fwd.angle_to(to / d)) > ASSIST_CONE:
+			continue
+		if d < best_d:
+			best = r
+			best_d = d
+	if best == null:
+		return
+	var to: Vector3 = best.global_position - player.global_position
+	var want := atan2(-to.x, -to.z)
+	var t := create_tween()
+	t.tween_property(player, "rotation:y", player.rotation.y + angle_difference(player.rotation.y, want), 0.12)
+	GameState.log_event("aim_assist", {"at": best.resident_id})
 
 
 ## Debug switches for playtesting (F4, debug builds only).

@@ -47,6 +47,25 @@ func _initialize() -> void:
 	main = scene.instantiate(); root.add_child(main)
 	await frames(30)
 	check(gs.has_item("revolver") and gs.equipped == "revolver", "next reporter starts with the revolver while the switch is on")
+	# Aim assist: off by default; when on, raising a weapon turns you to a hostile resident
+	var r = main.get_node("Resident_hall")
+	r.set_physics_process(false)
+	r.start_hostile()
+	main.player.global_position = r.global_position + Vector3(2.0, 0, 3.0)  # he's ~34° off to the left
+	main.player.face(0.0)
+	main._update_camera(true)
+	await frames(30)
+	var yaw0: float = main.player.rotation.y
+	check(gs.settings.aim_assist == false, "aim assist is off by default")
+	Input.action_press("aim"); await frames(20); Input.action_release("aim"); await frames(5)
+	check(absf(main.player.rotation.y - yaw0) < 0.01, "off: raising the gun doesn't turn you")
+	gs.settings.aim_assist = true
+	Input.action_press("aim"); await frames(20)
+	var to: Vector3 = r.global_position - main.player.global_position
+	var off: float = rad_to_deg((-main.player.global_transform.basis.z).angle_to(Vector3(to.x, 0, to.z)))
+	Input.action_release("aim"); await frames(5)
+	check(off < 3.0, "on: raising the gun turns you to face him (%.1f° off)" % off)
+	gs.settings.aim_assist = false
 	gs.debug.infinite_ammo = false
 	gs.reset_all()
 	print("FAILS: %d" % fails)

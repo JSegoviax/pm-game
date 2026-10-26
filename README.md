@@ -68,6 +68,12 @@ Every night starts **Calm**: residents talk to you, watch you and let you pass. 
 - **Shove** still stuns. Any hit on a stunned resident counts double, so shove-then-axe puts someone down in one blow.
 - **They get back up.** A downed resident rises again after about 40 seconds, weaker. To stop that, burn the body with **Lamp Oil** or finish it with the **Fire Axe**.
 
+## Settings
+
+On the title screen. Settings are saved separately, so **Start over** never resets them.
+
+- **Aim assist** (off by default): raising a weapon turns you toward the nearest resident who's already hostile, within 45°. Calm residents are never targeted.
+
 ## Debug menu (playtesting only)
 
 Press **F4** or the **backtick key (`)** while playing from Godot. On a Mac, F4 may need **fn**. The menu only exists in debug builds.

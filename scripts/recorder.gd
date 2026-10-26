@@ -225,6 +225,7 @@ func flush() -> void:
 		},
 		"reporter": int(GameState.meta.reporter),
 		"debug": GameState.debug.duplicate(),
+		"settings": GameState.settings.duplicate(),
 		"seed": GameState.night_seed,
 		"meta_at_start": _meta_at_start,
 		"placed": placed,
