@@ -13,7 +13,7 @@ config_version=5
 config/name="P.M."
 config/description="A reporter. An occult compound. It is not empty."
 run/main_scene="res://scenes/main.tscn"
-config/version="0.4.0"
+config/version="0.4.1"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [autoload]

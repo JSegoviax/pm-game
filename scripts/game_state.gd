@@ -7,7 +7,7 @@ extends Node
 ## - The META: what survives. Evidence sent home, facts locked in by that evidence, and the
 ##   compound's memory (doors that stay open). Lives in META_PATH.
 
-const VERSION := "0.4.0"
+const VERSION := "0.4.1"
 const SAVE_PATH := "user://save.json"   # a paused night
 const META_PATH := "user://meta.json"   # everything that carries over
 const MAX_SLOTS := 6

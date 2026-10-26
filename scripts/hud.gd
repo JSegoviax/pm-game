@@ -258,8 +258,12 @@ func _update_debug() -> void:
 	var gpu := RenderingServer.viewport_get_measured_render_time_gpu(_vp_rid)
 	var draws := int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
 	var mem := Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0
-	_debug.text = "%d FPS\nCPU %.1f ms\nGPU %s\n%d draws  %d MB" % [
+	var text := "%d FPS\nCPU %.1f ms\nGPU %s\n%d draws  %d MB" % [
 		fps, cpu, ("%.1f ms" % gpu) if gpu > 0.0 else "n/a", draws, int(mem)]
+	# Which night this is, so a strange or broken night can be reported and replayed.
+	if GameState.night_seed != 0:
+		text += "\nReporter #%d\nSeed %d" % [int(GameState.meta.reporter), GameState.night_seed]
+	_debug.text = text
 
 
 func _menu_input() -> void:
