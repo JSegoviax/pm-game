@@ -139,6 +139,13 @@ func _part(mesh: Mesh, pos: Vector3, color: Color) -> MeshInstance3D:
 
 # ---------------------------------------------------------------- public
 
+## Pronouns for messages about this resident: {he}/{him}/{He}/{his} become she/her for women.
+func words(text: String) -> String:
+	var f := kind in ["worshipper", "nurse"]
+	return text.replace("{He}", "She" if f else "He").replace("{he}", "she" if f else "he") \
+		.replace("{him}", "her" if f else "him").replace("{his}", "her" if f else "his")
+
+
 func can_talk() -> bool:
 	return state == State.IDLE
 
@@ -404,10 +411,16 @@ func _face(dir: Vector3, weight: float) -> void:
 	rotation.y = lerp_angle(rotation.y, want, clampf(weight * TURN_RATE, 0.0, 1.0))
 
 
+## Set by the level: shows a line and waits for the player to press the action button.
+var say_line: Callable
+
 func _talk(say: PackedStringArray) -> void:
 	for line in say:
-		spoke.emit(line, LINE_TIME)
-		await get_tree().create_timer(LINE_TIME, false).timeout
+		if say_line.is_valid():
+			await say_line.call(line)
+		else:
+			spoke.emit(line, LINE_TIME)
+			await get_tree().create_timer(LINE_TIME, false).timeout
 		if not is_inside_tree():
 			return
 	if state != State.TALKING:

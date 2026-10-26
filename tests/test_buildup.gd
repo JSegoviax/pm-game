@@ -5,6 +5,9 @@ var fails := 0
 func check(ok: bool, what: String) -> void:
 	print(("PASS " if ok else "FAIL ") + what)
 	if not ok: fails += 1
+func get_paused() -> bool:
+	return paused
+
 func frames(n: int) -> void:
 	for i in n: await physics_frame
 
@@ -24,7 +27,19 @@ func _initialize() -> void:
 	main.player.face(0.0)
 	await frames(10)
 	hall.engage(true)
-	await frames(60 * 10)
+	await process_frame
+	await process_frame
+	var first: String = main.hud._message.text
+	for k in 120: await process_frame
+	check(main.hud.talking and main.hud._message.text == first and get_paused(), "a line of dialogue waits until you press the button, with the game paused")
+	# Press through every line (his own greeting may come first), then stop pressing
+	for k in 12:
+		if not main.hud.talking:
+			break
+		Input.action_press("interact"); await process_frame; await process_frame
+		Input.action_release("interact")
+		for j in 10: await process_frame
+	await frames(30)
 	check(hall.state_name() == "idle", "calm: after talking he stays put (%s)" % hall.state_name())
 	check(main.player.health == 5, "calm: standing next to him is safe")
 	check(main._resident_prompt(hall) == "Talk", "you can talk to him again")

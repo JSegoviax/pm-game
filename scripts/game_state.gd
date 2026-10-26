@@ -7,7 +7,7 @@ extends Node
 ## - The META: what survives. Evidence sent home, facts locked in by that evidence, and the
 ##   compound's memory (doors that stay open). Lives in META_PATH.
 
-const VERSION := "0.5.3"
+const VERSION := "0.5.4"
 const SAVE_PATH := "user://save.json"   # a paused night
 const META_PATH := "user://meta.json"   # everything that carries over
 const MAX_SLOTS := 6
@@ -289,6 +289,10 @@ func add_item(id: String) -> bool:
 	# Rounds go in the revolver's box, not a slot of their own.
 	if ITEMS.get(id, {}).get("kind", "") == "ammo":
 		ammo += int(ITEMS[id].amount)
+		return true
+	# A second revolver is only worth its rounds.
+	if ITEMS.get(id, {}).get("kind", "") == "gun" and inventory.has(id):
+		ammo += 2
 		return true
 	if inventory.size() >= MAX_SLOTS:
 		return false

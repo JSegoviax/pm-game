@@ -48,6 +48,10 @@ Items and evidence land on marked spots that change every night. Keys always lan
 
 Every door has a lamp above it. A red lamp means the door is locked.
 
+**Cameras are checked automatically when the level loads.** Wherever you stand, the active camera must keep the reporter on screen, and when you walk up to a door, it must be in view. Where a hand-placed camera fails, the game picks a better angle from the room's corners and walls (splitting the area if needed) or adds a door camera. The plan is made once per session and reused every night. A door can be marked `hidden` in its lock settings when hiding it is deliberate.
+
+**Dialogue waits for you.** Each line stays up, with the game paused, until you press the action button.
+
 ## Build-up: the compound starts calm
 
 Every night starts **Calm**: residents talk to you, watch you and let you pass. They only attack if you attack them (or fire near them). Story beats raise the alert for the rest of the night:
@@ -102,4 +106,6 @@ godot --headless --path . -s tests/test_compound_and_combat.gd
 godot --headless --path . -s tests/test_recorder.gd
 godot --headless --path . -s tests/test_buildup.gd
 godot --headless --path . -s tests/test_debug.gd
+godot --headless --path . -s tests/test_room_coverage.gd
+godot --headless --path . -s tests/test_door_cameras.gd
 ```

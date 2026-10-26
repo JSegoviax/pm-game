@@ -30,6 +30,9 @@ func _initialize() -> void:
 	var main = scene.instantiate()
 	root.add_child(main)
 	await frames(30)
+	# This test moves the reporter around by itself; conversations would pause it waiting for a
+	# button press (test_buildup covers dialogue), so residents here skip their lines.
+	for x in main.residents: x.say_line = func(_t): pass
 	var M := {}
 	for m in main.MARKERS: M[m.id] = m
 
@@ -202,15 +205,31 @@ func _initialize() -> void:
 	check(main._aim_target(2.0, 0.5) == victim, "pipe reaches 1.85 m")
 	victim.set_physics_process(true)
 
+	# 8d. A second revolver adds rounds instead of a slot; women get the right pronouns
+	var slots_before: int = gs.inventory.size()
+	var ammo_before: int = gs.ammo
+	gs.add_item("revolver")
+	check(gs.inventory.size() == slots_before and gs.ammo == ammo_before + 2, "a second revolver adds 2 rounds, not a slot")
+	var nurse_r = null
+	for c in main.CAST:
+		if c.kind == "nurse":
+			main._spawn_resident(c, c.spots[0][0], c.spots[0][1])
+	for x in main.residents:
+		x.say_line = func(_t): pass
+		if x.kind == "nurse": nurse_r = x
+	check(nurse_r.words("{He} goes down. You shove {him} back.") == "She goes down. You shove her back.", "the nurse is 'she' in fight messages")
+
 	# 9. Pause and resume keeps the burned body and the gun
+	var ammo_saved: int = gs.ammo
 	gs.save_game(main.player.global_position, 0.0, main.player.health)
 	main.queue_free(); await frames(3)
 	gs.pending = "continue"
 	main = scene.instantiate(); root.add_child(main)
 	await frames(30)
+	for x in main.residents: x.say_line = func(_t): pass
 	var r2 = main.get_node("Resident_hall")
 	check(r2.is_dead(), "resumed night: the burned body is still there")
-	check(gs.ammo == 2 and gs.has_item("revolver"), "resumed night: revolver and rounds kept")
+	check(gs.ammo == ammo_saved and gs.has_item("revolver"), "resumed night: revolver and rounds kept (%d)" % gs.ammo)
 
 	gs.reset_all()
 	print("FAILS: %d" % fails)

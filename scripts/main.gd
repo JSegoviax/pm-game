@@ -40,6 +40,7 @@ var _flicker_lights: Array = []
 var _bounds := {}               # room name -> AABB, so residents stay in their room
 var residents: Array = []
 var _locked_lamps: Array = []  # {flag, bulb, light}: red until the lock is open for good
+var doors: Array = []          # {pos, inward, to_room, hidden}: every door, for the camera audit
 var _room := ""
 var _current_zone := -1
 var _started := false
@@ -68,6 +69,7 @@ func _ready() -> void:
 	_build_infirmary()
 	_build_dormitory()
 	_build_stairs()
+	_plan_cameras.call_deferred()
 
 	hud = HUD_SCRIPT.new()
 	add_child(hud)
@@ -244,6 +246,7 @@ func _room_shell(name_: String, center: Vector3, size_x: float, size_z: float, f
 	var room := Node3D.new()
 	room.name = name_
 	room.position = center
+	room.set_meta("half", Vector2(size_x / 2.0, size_z / 2.0))
 	add_child(room)
 	# Floors get tiles: the lines show how far away things are and which way is level.
 	var tiled := _tiles((floor_mat as StandardMaterial3D).albedo_color)
@@ -420,7 +423,9 @@ func _add_interactable(pos: Callable, range_: float, prompt: Callable, action: C
 ## A door. `lock` is optional: {"key": item id, "flag": unlock flag, "text": message when you lack the key}.
 func _door(room: Node3D, local_pos: Vector3, to: Vector3, yaw: float, to_room: String, lock := {}) -> void:
 	var p := room.global_position + local_pos
-	var side_wall := absf(local_pos.x) > absf(local_pos.z)
+	# A door is on a side wall (x = ±half width) when it's closer to one than to an end wall.
+	var half: Vector2 = room.get_meta("half", Vector2(absf(local_pos.x), absf(local_pos.z)))
+	var side_wall := absf(half.x - absf(local_pos.x)) < absf(half.y - absf(local_pos.z))
 	# Which way the door faces into the room
 	var inward := Vector3(-signf(local_pos.x), 0, 0) if side_wall else Vector3(0, 0, -signf(local_pos.z))
 	var door := Node3D.new()
@@ -459,6 +464,7 @@ func _door(room: Node3D, local_pos: Vector3, to: Vector3, yaw: float, to_room: S
 
 	var d := {"pos": p, "to": to, "yaw": yaw, "room": to_room}
 	d.merge(lock)
+	doors.append({"pos": p, "inward": inward, "to_room": to_room, "hidden": lock.get("hidden", false)})
 	_add_interactable(
 		func() -> Vector3: return p,
 		DOOR_REACH,
@@ -557,6 +563,7 @@ func _build_foyer() -> void:
 	var cam_north := _camera(foyer, Vector3(-5.4, 3.4, 4.6), Vector3(1.5, 0.8, -2.5))
 	_zone(foyer, "Foyer", Vector3(-6, -1, 0.5), Vector3(6, 4, 5), cam_south)
 	_zone(foyer, "Foyer", Vector3(-6, -1, -5), Vector3(6, 4, 0.5), cam_north)
+	_bounds["Foyer"] = AABB(FOYER + Vector3(-6, -1, -5), Vector3(12, 5, 10))
 
 	_door(foyer, Vector3(3.5, 0, -4.94), HALL + Vector3(0, 0.05, 6.5), 0.0, "East Hallway")
 	_door(foyer, Vector3(-5.94, 0, -2.5), WELCOME + Vector3(4.0, 0.05, 2.0), PI / 2, "Welcome Hall")
@@ -610,6 +617,7 @@ func _build_records_room() -> void:
 	var cam_b := _camera(room, Vector3(-2.6, 3.2, -2.6), Vector3(1.0, 0.5, 1.6), 60.0)
 	_zone(room, "Records Room", Vector3(-3, -1, -3), Vector3(3, 4, 0), cam_a)
 	_zone(room, "Records Room", Vector3(-3, -1, 0), Vector3(3, 4, 3), cam_b)
+	_bounds["Records Room"] = AABB(RECORDS + Vector3(-3, -1, -3), Vector3(6, 5, 6))
 
 	_door(room, Vector3(0, 0, 2.94), HALL + Vector3(0, 0.05, -7.0), PI, "East Hallway")
 	_door(room, Vector3(-2.94, 0, 1.0), STAIRS + Vector3(0, 0.05, 2.8), 0.0, "Basement Stairs")
@@ -775,6 +783,7 @@ func _build_stairs() -> void:
 	var room := Node3D.new()
 	room.name = "BasementStairs"
 	room.position = STAIRS
+	room.set_meta("half", Vector2(2.0, 4.0))
 	add_child(room)
 	var stone := _mat(Color(0.30, 0.29, 0.27), true)
 	var dark := _mat(Color(0.18, 0.17, 0.16), true)
@@ -810,6 +819,268 @@ func _build_stairs() -> void:
 		1.6,
 		func() -> String: return "Examine gate",
 		func() -> void: hud.show_message("A chain as thick as your wrist, and new. Somewhere below, a choir is singing. One voice is much older than the others.", 5.0))
+
+
+## Every door should be on screen when you walk up to it. For each door whose room camera can't
+## see it, add a small zone in front of it with a camera that frames the door and the reporter,
+## chosen from the room's corners and wall midpoints. Doors marked `hidden` are left alone.
+const DOOR_ZONE_DEPTH := 2.2
+const DOOR_ZONE_WIDTH := 2.6
+
+## Runs once the rooms exist: first make sure every room's cameras keep the reporter on screen,
+## then make sure every door is in view.
+## The rooms never change, so the plan is made once per session and reused every night.
+static var _plan_cache: Array = []
+
+func _plan_cameras() -> void:
+	if not _plan_cache.is_empty():
+		zones.clear()
+		for z in _plan_cache:
+			var cam := Camera3D.new()
+			cam.fov = z.fov
+			add_child(cam)
+			cam.global_transform = z.xform
+			zones.append({"box": z.box, "camera": cam, "room": z.room})
+		_current_zone = -1
+		_update_camera(true)
+		return
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	_ensure_room_coverage()
+	_ensure_door_views()
+	_plan_cache = zones.map(func(z) -> Dictionary:
+		return {"box": z.box, "xform": (z.camera as Camera3D).global_transform, "fov": (z.camera as Camera3D).fov, "room": z.room})
+
+
+# ---------------------------------------------------------------- room coverage
+
+const COVER_STEP := 0.75     # sample a standing spot every 0.75 m
+const COVER_NEEDED := 0.95   # a camera must keep you on screen across 95% of its area
+
+## Standing spots on the floor of `room` (not on furniture), optionally limited to `box`.
+func _floor_points(room: String, box := AABB()) -> Array:
+	var b: AABB = _bounds[room]
+	var out := []
+	var floor_y := b.position.y + 1.0
+	var space := get_world_3d().direct_space_state
+	var x := b.position.x + 0.4
+	while x <= b.end.x - 0.4:
+		var z := b.position.z + 0.4
+		while z <= b.end.z - 0.4:
+			if box.size == Vector3.ZERO or (x >= box.position.x and x <= box.end.x and z >= box.position.z and z <= box.end.z):
+				var q := PhysicsRayQueryParameters3D.create(Vector3(x, b.end.y - 0.3, z), Vector3(x, b.position.y - 0.5, z))
+				var hit := space.intersect_ray(q)
+				if not hit.is_empty():
+					var y: float = hit.position.y
+					var on_floor := room == "Basement Stairs" or y < floor_y + 0.2
+					if on_floor:
+						out.append(Vector3(x, y + 0.05, z))
+			z += COVER_STEP
+		x += COVER_STEP
+	return out
+
+
+## Share of `points` where `cam` keeps the reporter (chest height) on screen.
+func _coverage(cam: Camera3D, points: Array) -> float:
+	if points.is_empty():
+		return 1.0
+	var seen := 0
+	for p in points:
+		if _cam_sees(cam, p + Vector3(0, 1.0, 0)):
+			seen += 1
+	return float(seen) / points.size()
+
+
+func _ensure_room_coverage() -> void:
+	var i := 0
+	while i < zones.size():
+		var z: Dictionary = zones[i]
+		var room: String = z.room
+		if not _bounds.has(room):
+			i += 1
+			continue
+		var pts := _floor_points(room, z.box)
+		if _coverage(z.camera, pts) >= COVER_NEEDED:
+			i += 1
+			continue
+		var replacement := _plan_box(room, (z.box as AABB).intersection(_bounds[room]), 0)
+		zones.remove_at(i)
+		for r in replacement:
+			zones.insert(i, r)
+			i += 1
+
+
+## Finds the camera that best keeps the reporter in view across `box`; splits the box in two
+## when no single angle covers enough of it.
+func _plan_box(room: String, box: AABB, depth: int) -> Array:
+	var pts := _floor_points(room, box)
+	var room_pts := _floor_points(room)
+	var b: AABB = _bounds[room]
+	var aims := [box.get_center(), b.get_center()]
+	var best: Camera3D = null
+	var best_cov := -1.0
+	var best_score := -INF
+	for spot in _camera_spots(b):
+		for aim in aims:
+			var a: Vector3 = Vector3(aim.x, b.position.y + 1.6, aim.z)
+			if spot.distance_to(a) < 2.0:
+				continue
+			var cam := Camera3D.new()
+			cam.fov = 62.0
+			add_child(cam)
+			cam.global_position = spot
+			cam.look_at(a, Vector3.UP)
+			var cov := _coverage(cam, pts)
+			# Mostly: keep the reporter on screen here. Then: show as much of the room as possible.
+			var score: float = cov * 10.0 + _coverage(cam, room_pts) * 3.0 + (spot as Vector3).distance_to(box.get_center()) * 0.05
+			if score > best_score:
+				if best != null:
+					best.queue_free()
+				best = cam
+				best_cov = cov
+				best_score = score
+			else:
+				cam.queue_free()
+	if best_cov >= COVER_NEEDED or depth >= 3:
+		return [{"box": box.grow(0.01), "camera": best, "room": room}]
+	best.queue_free()
+	# Split along the longer side and plan each half
+	var half := box
+	var other := box
+	if box.size.x >= box.size.z:
+		half.size.x /= 2.0
+		other.size.x /= 2.0
+		other.position.x += half.size.x
+	else:
+		half.size.z /= 2.0
+		other.size.z /= 2.0
+		other.position.z += half.size.z
+	return _plan_box(room, half, depth + 1) + _plan_box(room, other, depth + 1)
+
+
+# ---------------------------------------------------------------- door views
+
+func _ensure_door_views() -> void:
+	var added := []
+	for d in doors:
+		if d.hidden:
+			continue
+		var stand: Vector3 = d.pos + d.inward * 1.1 + Vector3(0, 0.05, 0)
+		var room := _room_at(stand)
+		if room == "":
+			continue
+		# The area in front of the door
+		var side := Vector3(d.inward.z, 0, -d.inward.x).abs()
+		var center: Vector3 = d.pos + d.inward * (DOOR_ZONE_DEPTH / 2.0)
+		var half: Vector3 = side * (DOOR_ZONE_WIDTH / 2.0) + d.inward.abs() * (DOOR_ZONE_DEPTH / 2.0) + Vector3(0, 2.5, 0)
+		var box := AABB(center - half, half * 2.0)
+		var pts := _floor_points(room, box)
+		# Already fine: the cameras that cover this area see the door and keep you on screen
+		var ok := true
+		for p in pts + [stand]:
+			var c := _camera_for(p)
+			if c == null or not _cam_sees(c, p + Vector3(0, 1.0, 0)) or not (_cam_sees(c, d.pos + Vector3(0, 1.3, 0) + d.inward * 0.12) or _cam_sees(c, d.pos + Vector3(0, 2.6, 0) + d.inward * 0.12)):
+				ok = false
+				break
+		if ok:
+			continue
+		var best: Camera3D = null
+		var best_score := -INF
+		for c in _camera_spots(_bounds[room]):
+			var aim: Vector3 = (d.pos + Vector3(0, 1.2, 0)).lerp(stand + Vector3(0, 0.9, 0), 0.35)
+			if (c as Vector3).distance_to(aim) < 1.5:
+				continue
+			var probe := Camera3D.new()
+			probe.fov = 62.0
+			add_child(probe)
+			probe.global_position = c
+			probe.look_at(aim, Vector3.UP)
+			var cov := _coverage(probe, pts)
+			if _door_visible(probe, d, stand) and cov >= COVER_NEEDED:
+				# Prefer a wide shot from in front of the door rather than beside it
+				var facing: float = ((c as Vector3) - d.pos).normalized().dot(d.inward)
+				var score: float = (c as Vector3).distance_to(d.pos) + facing * 3.0
+				if score > best_score:
+					if best != null:
+						best.queue_free()
+					best = probe
+					best_score = score
+					continue
+			probe.queue_free()
+		if best == null:
+			push_warning("No camera can see the door to %s" % d.to_room)
+			continue
+		zones.insert(0, {"box": box, "camera": best, "room": room})
+		added.append(d.to_room)
+	_current_zone = -1
+	_update_camera(true)
+
+
+func _room_at(p: Vector3) -> String:
+	for room in _bounds:
+		if (_bounds[room] as AABB).has_point(p + Vector3(0, 0.5, 0)):
+			return room
+	return ""
+
+
+func _camera_for(p: Vector3) -> Camera3D:
+	for z in zones:
+		if (z.box as AABB).has_point(p + Vector3(0, 0.5, 0)):
+			return z.camera
+	return null
+
+
+## Ceiling-height spots in the room's corners and along its walls.
+func _camera_spots(b: AABB) -> Array:
+	var out := []
+	var y := b.position.y + 1.0 + 3.35
+	var x0 := b.position.x + 0.5
+	var x1 := b.end.x - 0.5
+	var z0 := b.position.z + 0.5
+	var z1 := b.end.z - 0.5
+	for fx in [0.0, 0.25, 0.5, 0.75, 1.0]:
+		out.append(Vector3(lerpf(x0, x1, fx), y, z0))
+		out.append(Vector3(lerpf(x0, x1, fx), y, z1))
+	for fz in [0.25, 0.5, 0.75]:
+		out.append(Vector3(x0, y, lerpf(z0, z1, fz)))
+		out.append(Vector3(x1, y, lerpf(z0, z1, fz)))
+	return out
+
+
+## Whether `cam` shows the door (its middle, or at least its frame and lamp) and the reporter
+## standing in front of it.
+func _door_visible(cam: Camera3D, d: Dictionary, stand: Vector3) -> bool:
+	var middle: Vector3 = d.pos + Vector3(0, 1.3, 0) + d.inward * 0.12
+	var lamp: Vector3 = d.pos + Vector3(0, 2.6, 0) + d.inward * 0.12
+	var who: Vector3 = stand + Vector3(0, 1.0, 0)
+	return (_cam_sees(cam, middle) or _cam_sees(cam, lamp)) and _cam_sees(cam, who)
+
+
+func _cam_sees(cam: Camera3D, p: Vector3) -> bool:
+	if cam.is_position_behind(p):
+		return false
+	# The game renders at 320x240; measure the frame at that size
+	var aspect := 320.0 / 240.0
+	var local := cam.global_transform.affine_inverse() * p
+	if local.z >= 0.0:
+		return false
+	var t := tan(deg_to_rad(cam.fov) / 2.0)
+	var ny := (local.y / -local.z) / t
+	var nx := (local.x / -local.z) / (t * aspect)
+	if absf(nx) > 0.92 or absf(ny) > 0.92:
+		return false
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(cam.global_position, p)
+	# Only the building counts: people move, the walls don't
+	var skip: Array[RID] = []
+	if player != null:
+		skip.append(player.get_rid())
+	for r in residents:
+		if is_instance_valid(r):
+			skip.append(r.get_rid())
+	q.exclude = skip
+	var hit := space.intersect_ray(q)
+	return hit.is_empty() or (hit.position as Vector3).distance_to(p) < 0.35
 
 
 ## Marked spots, Rogue Legacy style: rooms are hand-built and always the same; what sits on
@@ -959,13 +1230,14 @@ func _spawn_resident(c: Dictionary, pos: Vector3, yaw: float) -> void:
 	r.target = player
 	r.bounds = _bounds[c.room]
 	r.spoke.connect(hud.show_message)
+	r.say_line = _say
 	r.hit_player.connect(func() -> void: player.take_hit(r.global_position))
 	r.turned_hostile.connect(func() -> void: _on_resident_hostile(r))
 	r.went_down.connect(func() -> void: _on_resident_down(r))
 	r.rose.connect(func() -> void:
 		GameState.log_event("resident_rose", {"who": r.resident_id})
 		if _room == c.room:
-			hud.show_message("He's getting up.", 2.0))
+			hud.show_message(r.words("{He}'s getting up."), 2.0))
 	var dead: String = str(GameState.flags.get("dead_" + c.id, ""))
 	if dead != "":
 		r.start_dead(dead)
@@ -1203,6 +1475,7 @@ func _take(slot: String, node: Node3D, entry: Dictionary) -> void:
 		node.queue_free()
 		_read_lead(id)
 		return
+	var spare_gun: bool = GameState.ITEMS[id].kind == "gun" and GameState.has_item(id)
 	if not GameState.add_item(id):
 		hud.show_message("You can't carry any more.", 2.5)
 		return
@@ -1210,7 +1483,10 @@ func _take(slot: String, node: Node3D, entry: Dictionary) -> void:
 	GameState.log_event("pickup", {"id": id})
 	interactables.erase(entry)
 	node.queue_free()
-	hud.show_message("Picked up the %s." % GameState.item_name(id), 2.5)
+	if spare_gun:
+		hud.show_message("You already have a revolver. You take the rounds from this one.", 3.0)
+	else:
+		hud.show_message("Picked up the %s." % GameState.item_name(id), 2.5)
 	var kind: String = GameState.ITEMS[id].kind
 	if kind in ["melee", "gun"] and not GameState.meta.get("hint_aim", false):
 		GameState.meta["hint_aim"] = true
@@ -1252,7 +1528,7 @@ func _resident_action(r: Node3D) -> void:
 		GameState.log_event("shove", {"who": r.resident_id})
 		player.shove(r.global_position)
 		r.stagger(player.global_position)
-		hud.show_message("You shove him back. Go.", 1.6)
+		hud.show_message(r.words("You shove {him} back. Go."), 1.6)
 
 
 ## Ends a downed resident for the night, so he doesn't get back up.
@@ -1263,7 +1539,7 @@ func _finish_body(r: Node3D) -> void:
 		r.finish("burned")
 		GameState.flags["dead_" + r.resident_id] = "burned"
 		GameState.log_event("finished", {"who": r.resident_id, "how": "burned"})
-		hud.show_message("You pour the oil and strike a match. He doesn't make a sound. That's the worst part.", 4.0)
+		hud.show_message(r.words("You pour the oil and strike a match. {He} doesn't make a sound. That's the worst part."), 4.0)
 	elif GameState.has_item("fire_axe"):
 		r.finish("axe")
 		GameState.flags["dead_" + r.resident_id] = "axe"
@@ -1271,7 +1547,7 @@ func _finish_body(r: Node3D) -> void:
 		_wear("fire_axe")
 		hud.show_message("One blow. You don't look at what you did.", 3.5)
 	else:
-		hud.show_message("He isn't breathing. He wasn't breathing before, either. He won't stay down.", 4.0)
+		hud.show_message(r.words("{He} isn't breathing. {He} wasn't breathing before, either. {He} won't stay down."), 4.0)
 
 
 func _on_resident_hostile(r: Node3D) -> void:
@@ -1292,7 +1568,7 @@ func _on_resident_down(r: Node3D) -> void:
 		GameState.save_meta()
 		hud.flash_hint("He'll get back up. Burn the body with lamp oil, or finish it with an axe.", 8.0)
 	else:
-		hud.show_message("He goes down.", 1.5)
+		hud.show_message(r.words("{He} goes down."), 1.5)
 
 
 # ---------------------------------------------------------------- fighting
@@ -1351,7 +1627,7 @@ func _attack() -> void:
 			var down: bool = t.damage(int(item.damage), player.global_position)
 			_hit_flash(t)
 			if not down:
-				hud.show_message("He jerks back. He keeps coming.", 1.5)
+				hud.show_message(t.words("{He} jerks back. {He} keeps coming."), 1.5)
 		if GameState.ammo == 0 and not GameState.debug.infinite_ammo:
 			hud.flash_hint("That was the last round.", 3.0)
 		return
@@ -1365,8 +1641,18 @@ func _attack() -> void:
 	t.damage(int(item.damage), player.global_position)
 	_hit_flash(t)
 	if stunned and w == "fire_axe" and t.is_down():
-		hud.show_message("While he reels, you bring the axe down.", 2.0)
+		hud.show_message(t.words("While {he} reels, you bring the axe down."), 2.0)
 	_wear(w)
+
+
+## One line of conversation: everything waits while the player reads it.
+func _say(line: String) -> void:
+	_busy = true
+	get_tree().paused = true
+	await hud.say(line)
+	get_tree().paused = false
+	_busy = false
+	_ui_cd = 0.3
 
 
 ## Debug switches for playtesting (F4, debug builds only).

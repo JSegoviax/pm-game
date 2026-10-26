@@ -162,6 +162,28 @@ func show_message(text: String, seconds := 2.5) -> void:
 	_message_t = seconds
 
 
+## Shows one line of dialogue and waits until the player presses the action button.
+## The game is paused while it's up, so slow readers never miss a line.
+var talking := false
+
+func say(text: String) -> void:
+	talking = true
+	GameState.log_event("message", {"text": keys(text)})
+	_message.text = keys(text)
+	_message_t = 0.0
+	set_prompt("[{interact}] Continue")
+	# Wait for the button to be let go (the press that started the talk, or the last line's),
+	# then for a fresh press. Holding the button never skips lines.
+	await get_tree().process_frame
+	while Input.is_action_pressed("interact"):
+		await get_tree().process_frame
+	while not Input.is_action_pressed("interact"):
+		await get_tree().process_frame
+	_message.text = ""
+	set_prompt("")
+	talking = false
+
+
 ## The weapon readout in the bottom-left corner, shown while aiming.
 func set_weapon(text: String) -> void:
 	_weapon.text = text
